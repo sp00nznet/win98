@@ -192,6 +192,16 @@ int w16_test(void) {
             {   /* SYSTEM/KEYBOARD/MOUSE/DISPLAY.DRV for KRNL386's own LoadModule: host stand-ins (drv16.c) */
                 void w16_drv_write(const char *sysdir);
                 w16_drv_write("work/root/WINDOWS/SYSTEM");
+                /* SYSTEM.INI [boot] names them (USER's LibEntry LoadLibrarys display.drv=; with
+                 * none it writes *DisplayFallback=1 and fails). Rewritten each run: the guest's own. */
+                FILE* ini = fopen("work/root/WINDOWS/SYSTEM.INI", "w");
+                if (ini) {
+                    fputs("[boot]\nsystem.drv=system.drv\nkeyboard.drv=keyboard.drv\nmouse.drv=mouse.drv\n"
+                          "display.drv=display.drv\ncomm.drv=comm.drv\nsound.drv=mmsound.drv\n"
+                          "fonts.fon=vgasys.fon\nfixedfon.fon=vgafix.fon\noemfonts.fon=vgaoem.fon\nshell=Explorer.exe\n"
+                          "\n[boot.description]\ndisplay.drv=pcrecomp host display\n", ini);
+                    fclose(ini);
+                }
             }
             r.ax = 0x4B4F; r.es = 0x1000;
             /* what KRNL386's MZ stub (the load module's first bytes, entered by
