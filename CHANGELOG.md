@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Milestone 2, session 19: SHELL.DLL's LibMain returns (ne_lift resolves
+  __WINFLAGS; LibEntry took the InitTask path); MSGSRV32 calls WNetInitialize
+  through USER's flat thunk into lifted MPR (second stub form, lea without a
+  segment base, ring-0 mutexes, int 21h 50h). Stops on an uninitialized
+  critical section in MPR.
 - Milestone 2, session 17: guest threads start on their own stack selector
   (the stray USER thread's Win16 stack was built from a 16-bit esp);
   VWIN32 Event Wait/Set/Destroy, VMM HeapReAllocate, int 21h 50h/55h for

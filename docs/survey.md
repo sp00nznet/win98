@@ -1539,3 +1539,72 @@ ponytail (this session):
 johnny and civnet relift in s18-* scratch trees (2f6d052 vs 513bced, then vs
 e19b797): normal mode identical C and mem_image.bin; identity mode differs
 only by the trampoline transform, and e19b797 changes nothing for either.
+
+### Session 19: SHELL.DLL's LibMain returns (__WINFLAGS), MSGSRV32 into WNetInitialize -> lifted MPR (handoff)
+
+pcrecomp w98 f1da364; win98 this commit. Relink work/w16 (ne_lift changed)
+and relift w16test and xcopy (lift32 changed), README commands.
+
+**Root cause (task 1): not the int 21h hook.** The saved bp in LibMain's
+frame (ss:7A8C) is never overwritten (W16_WW=11FF:7A8C watch: 7A9B from
+LibMain's prologue to its epilogue; the _lclose path's 852A/89DF/9DF0 bp/sp
+are balanced, same as the 716C open before it). The bad bp comes from
+SHELL's LibEntry: `mov ax, 0FFFFh; or ax, ax; jns` at 91:0015, where FFFF is
+the end of a relocation CHAIN for KERNEL.178 (__WINFLAGS, head at 91:0191).
+ne_lift resolved __AHINCR/__AHSHIFT and the real-mode selectors in a mov
+immediate but not __WINFLAGS, so ax stayed FFFF, LibEntry took the InitTask
+path (KERNEL.91), and InitTask's frame trick left bp = 0 and sp one word
+low; LibEntry's epilogue then returned through that. Fix (generic): ne_lift
+emits win16.WINFLAGS (0403h) for KERNEL.178. USER has two such sites too
+(seg 72). johnny and civnet relift in s19-* scratch trees, normal and
+identity mode, against e19b797: identical C and mem_image.bin (no
+__WINFLAGS mov site in either).
+
+**What runs after it.** SHELL's LibMain returns, LoadLibrary("SHELL.DLL")
+completes, and MSGSRV32 (89:1601) calls USER's WNetInitialize (seg 71
+0634 -> flat thunk 08A6/08C0/08E0 -> KRNL386 1:7618):
+- 7618 writes a second stub form over the thunk and retfs into it:
+  `B8 sel / 8E C0 / 66 BA imm32 / 66 EA off32 sel16` (es = sel, edx = imm).
+  w16_retf now runs it as it does 76BA's form.
+- kernel32's flat-thunk dispatcher (BFF718C7) finds the thunk unconnected
+  for this process and goes back to 16-bit KRNL386 (718AE retf) to connect
+  it, which jmp far32s into 718C7 again: two 16->32 frames with the same
+  16-bit return. w16_enter longjmps to the outermost of that run.
+- kernel32 walks the 16-bit module list with `lea esi, ds:[esi+9]` on a
+  16-bit ds: lift32 added DS_BASE to a lea. lea is now the offset alone.
+- int 21h 50h (set PSP) from kernel32; 51h/62h answer the current PSP.
+- MPR.DLL (lifted) loads; its DllMain does CreateMutex("MPRMutex") then
+  WaitForSingleObject. Win98's WaitForSingleObject goes straight to ring 0
+  (VWIN32 5C, 0xBFF99B28) and ring 0 owns mutexes (CreateMutex(TRUE) is a
+  5C with 0 ms; ReleaseMutex is 5F, 0xBFF92DC1); vxd32 blocked on every
+  wait. Mutexes (kernel32 type 3) now have owner/recursion kept in vxd32,
+  taken at once when free or ours, handed to one waiter on release.
+
+**Where it stops.** In WNetInitialize's 32-bit half, MPR (7FBF6477, a
+method, ecx = this) calls EnterCriticalSection on an object whose type byte
+is not 4 (an uninitialized CS); kernel32 raises C0000005, and RaiseException
+asks VWIN32 14 (0, CONTEXT*) for the thread context: unknown service, exit 5.
+Next: find who builds that MPR object (its constructor should
+InitializeCriticalSection at +0; probably a DllMain branch or a lifted
+conditional), rather than answering 14.
+
+**Tasks 2-4 not reached.** The 16-bit registry is still unrouted; SHELL's
+LibMain writes work/root/WINDOWS/REG.DAT on every run (deleted again after
+this session's runs; it comes back until VMM 100h+ goes to regbox32). No
+shell start, no calc, no input yet.
+
+Tools: W16_WW=ss:off (with W16_FN) prints the first function that sees that
+word change. k32host's --watchdog N now dumps every thread's stack (a
+deadlock shows the waiter and the holder).
+
+ponytail (this session):
+- __WINFLAGS = 0403h (win16.WINFLAGS), not read from KRNL386's own value.
+- Mutexes: 64 slots, no abandonment when an owner dies, wait-all still
+  wait-any; a mutex is "type byte 3" with no other check.
+- int 21h 50h: the PSP is just remembered (no per-task switch of the JFT).
+- Thunk return: the outermost frame of a run of equal returns is taken
+  (assumes the inner ones are re-entries of the same call).
+
+**Regression.** check_m1 (xcopy relifted with the lift32 lea change) and
+check_w16 pass after the runtime changes. johnny/civnet relift identical in
+both modes (above).

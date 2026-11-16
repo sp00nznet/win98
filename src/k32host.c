@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 
 #include "native32.h"
 extern const char* g_cur_import;
@@ -94,11 +95,16 @@ static DWORD WINAPI watchdog(LPVOID unused) {
     (void)unused;
     Sleep(g_watchdog_s * 1000);
     fprintf(stderr, "\n[watchdog] %lu s: in sub_%08X, last native call %s\n", g_watchdog_s, g_cur_func, g_cur_import);
-    if (g_main_th && SuspendThread(g_main_th) != (DWORD)-1) {   /* where the main thread is */
+    SymSetOptions(SYMOPT_LOAD_LINES);
+    SymInitialize(GetCurrentProcess(), NULL, TRUE);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);   /* where every thread is (a deadlock has several) */
+    THREADENTRY32 te = { sizeof te };
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
+        HANDLE th = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
         CONTEXT c = { 0 };
         c.ContextFlags = CONTEXT_FULL;
-        SymSetOptions(SYMOPT_LOAD_LINES);
-        if (GetThreadContext(g_main_th, &c) && SymInitialize(GetCurrentProcess(), NULL, TRUE)) dump_stack(g_main_th, c, 24);
+        if (th && SuspendThread(th) != (DWORD)-1 && GetThreadContext(th, &c)) { fprintf(stderr, "  thread %lu:\n", te.th32ThreadID); dump_stack(th, c, 24); }
     }
     fflush(stderr);
     TerminateProcess(GetCurrentProcess(), 4);
