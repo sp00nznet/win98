@@ -1608,3 +1608,71 @@ ponytail (this session):
 **Regression.** check_m1 (xcopy relifted with the lift32 lea change) and
 check_w16 pass after the runtime changes. johnny/civnet relift identical in
 both modes (above).
+
+### Session 20: the MPR object is MPREXE's (MPREXE.EXE lifted and started in-process); stops in BroadcastSystemMessage (handoff)
+
+pcrecomp w98 (this session's commit); win98 this commit. Recatalog and relift
+w16test (disasm32 changed; README command + mprexe.exe mprserv.dll mspwl32.dll)
+and xcopy.
+
+**Root cause (task 1).** Not a DllMain branch. WNetInitialize's 32-bit half
+(MPR 7FBF1C26) sees MPR's shared global [7FBF8040] empty, creates an event,
+CreateProcessAs <sysdir>\MPREXE.EXE and waits; MPREXE calls MPR ordinal 7
+(7FBF1BE3), which stores its object in [8040] and sets the event. MPREXE was
+not in the guest's C:\, so CreateProcess failed, the wait was skipped, and
+7FBF6477 ran with this = 0 (EnterCriticalSection(NULL)). Fixes:
+- k32host copies MPREXE.EXE, MPRSERV.DLL, MSPWL32.DLL into the root; all
+  three are lifted into w16test. kernel32's own CreateProcess runs MPREXE as
+  a second process in the one address space.
+- MPREXE's base (0x500000) is held from the host's start: native32_hold_range
+  now takes up to 8 spans. Otherwise a host heap took it and kernel32 relocated
+  the image where no lifted code is.
+- vxd32: VMM 8 _PageAttach (no-op, one address space); VxD 4B Get_Version
+  (absent); VxD 2B 15 and VWIN32 1F, CreateFile on \.\IFSMGR (no devices,
+  file not found); VMM 1D RegQueryInfoKey and 15 RegSetValue (regbox32);
+  VWIN32 5E ReleaseSemaphore (type 1, +8 count, +10 max), and waits now see an
+  event/semaphore signalled *before* the wait (MPREXE set MPR's event before
+  MSGSRV32 waited on it).
+- **Original code ran natively**: MPREXE's thread start 0x005010C3 (only
+  referenced by `push offset` ahead of its CreateThread wrapper) was not
+  catalogued, because its bytes `53 56 57 6A 00` read as the string "SVWj"
+  and disasm32's string guard rejected it. kernel32's PageCommit memory was
+  PAGE_EXECUTE_READWRITE, so the icall ran the original bytes. Both fixed:
+  the string guard skips data opening with two register pushes, and vxd32
+  reserves/commits guest memory PAGE_READWRITE (an unlifted guest address now
+  faults instead of running).
+
+VWIN32 14 (thread context) was not needed after the fix and is still not
+implemented (task 1b open).
+
+**Where it stops.** WNetInitialize returns; MSGSRV32 (89:1601) calls USER's
+BroadcastSystemMessage (USER seg 16:0054) and waits for good on a reply event
+(16-bit WaitForSingleObject, kernel32 9420D). The receiver is MPREXE's worker
+thread (5010C3), which has a USER queue but never pumps; it ends after its
+30 s semaphore wait. On its ExitThread kernel32 QT_Thunks to KRNL386 0437:4BA0
+(thunk 34) twice; the second entry has ss:esp 0000:FB6A and flat return 0
+(W16_TRACE), so the 16-bit thread-exit cleanup (which would free the queue and
+wake senders) never runs. Next: why the second thunk-34 entry gets ss 0
+(probably the thread's 16-bit stack already freed before the call, or a
+frame mismatch in w16_enter for a thread that is dying).
+
+**Tasks 2-5 not reached.** REG.DAT routing, calc, input: as in session 19.
+
+Tools: the watchdog prints the Win16Mutex, each ring-0 thread (kernel32
+thread, process, host thread id, wait list) and held mutexes
+(native32_w9x_dump_threads), dumps 48 frames, and flushes --calltrace. The
+"no lifted function" stop prints the 32 bytes there.
+
+ponytail (this session):
+- VMM 8 PageAttach is a no-op; VxD 4B, VxD 2B 15 and VWIN32 1F answer "absent".
+- RegQueryInfoKeyA is not in regbox32's list: like RegEnumKeyA it falls to
+  advapi32 on the boxed handle (read-only).
+- A wait entry whose +4 is above FFFFh is an object with a wait block there,
+  else a wait block with its count at +4.
+- The string guard's two-push exception ('P'..'W' twice) could take a real
+  string such as "SV\0".
+- Held bases are listed by hand in k32host (`later[]`: mprexe.exe).
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet relift (ne_link,
+s20-* scratch trees, f1da364 vs this commit, normal and identity): see the
+commit; ne_link does not import disasm32.

@@ -95,6 +95,11 @@ static DWORD WINAPI watchdog(LPVOID unused) {
     (void)unused;
     Sleep(g_watchdog_s * 1000);
     fprintf(stderr, "\n[watchdog] %lu s: in sub_%08X, last native call %s\n", g_watchdog_s, g_cur_func, g_cur_import);
+    {   void native32_w9x_dump_threads(void);
+        uint32_t w16m = MEM32(0xBFFC9470u);
+        fprintf(stderr, "  Win16Mutex %08X owner %08X, crst 9D10 owner %08X\n", w16m, w16m ? MEM32(w16m + 8) : 0, MEM32(0xBFFC9D10u) ? MEM32(MEM32(0xBFFC9D10u) + 8) : 0);
+        native32_w9x_dump_threads();
+    }
     SymSetOptions(SYMOPT_LOAD_LINES);
     SymInitialize(GetCurrentProcess(), NULL, TRUE);
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);   /* where every thread is (a deadlock has several) */
@@ -104,9 +109,10 @@ static DWORD WINAPI watchdog(LPVOID unused) {
         HANDLE th = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
         CONTEXT c = { 0 };
         c.ContextFlags = CONTEXT_FULL;
-        if (th && SuspendThread(th) != (DWORD)-1 && GetThreadContext(th, &c)) { fprintf(stderr, "  thread %lu:\n", te.th32ThreadID); dump_stack(th, c, 24); }
+        if (th && SuspendThread(th) != (DWORD)-1 && GetThreadContext(th, &c)) { fprintf(stderr, "  thread %lu:\n", te.th32ThreadID); dump_stack(th, c, 48); }
     }
     fflush(stderr);
+    recomp_trace_flush();
     TerminateProcess(GetCurrentProcess(), 4);
     return 0;
 }
@@ -233,7 +239,10 @@ static int host_main(int argc, char** argv) {
         {   /* the 16-bit modules, which KRNL386 opens by path (its own EXE first) */
             /* and the 32-bit halves GDI.EXE/USER.EXE LoadLibrary32 (lifted into this host;
              * MPR.DLL: USER's DllEntryPoint ThunkConnect16s USER.EXE <-> MPR.DLL) */
-            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL", "DDEML.DLL", "MPR.DLL", "MSGSRV32.EXE" };
+            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL", "DDEML.DLL", "MPR.DLL", "MSGSRV32.EXE",
+                /* MPR's WNetInitialize CreateProcesses MPREXE.EXE and waits for it to hand
+                 * MPR its object (MPR ordinal 7); MPREXE loads MPRSERV, MPRSERV MSPWL32 */
+                "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL" };
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
@@ -272,6 +281,25 @@ static int host_main(int argc, char** argv) {
             }
         }
     }
+#ifdef W16_IMAGE
+    {   /* The lifted EXEs kernel32's own loader maps later (CreateProcess): their
+         * bases are held from the host's start (native32_hold_image's relaunch),
+         * or a host heap lands there first and the image is relocated where no
+         * lifted code is (vxd32's PageReserve takes a held base as the image's). */
+        static const char* const later[] = { "mprexe.exe" };
+        for (int i = 0; i < (int)(sizeof later / sizeof *later); i++) {
+            char img[MAX_PATH];
+            IMAGE_DOS_HEADER dh;
+            IMAGE_NT_HEADERS32 nh;
+            _snprintf(img, sizeof img - 1, "%s\\%s", dir, later[i]);
+            img[MAX_PATH - 1] = 0;
+            FILE* f = fopen(img, "rb");
+            if (f && fread(&dh, sizeof dh, 1, f) == 1 && !fseek(f, dh.e_lfanew, SEEK_SET) && fread(&nh, sizeof nh, 1, f) == 1)
+                native32_hold_range(nh.OptionalHeader.ImageBase, nh.OptionalHeader.SizeOfImage);
+            if (f) fclose(f);
+        }
+    }
+#endif
     for (int i = 0; i < 1; i++) {   /* the EXE only: hold_image relaunches once per call; 0xBFF70000 is free anyway */
         char img[MAX_PATH];
         _snprintf(img, sizeof img - 1, "%s\\%s", dir, g_mods[i].name);
