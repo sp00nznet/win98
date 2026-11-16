@@ -23,6 +23,7 @@ extern uint32_t g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi;
 extern uint16_t g_seg_ds;
 extern uint32_t g_fs_base;
 uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
+uint8_t *native32_w9x_desc(uint16_t sel);
 
 #define QT_THUNK 0xBFF727D9u
 #define MEM32(a) (*(uint32_t*)(uintptr_t)(a))
@@ -198,6 +199,7 @@ int w16_test(void) {
              * sp = si = 200h (its NE header, rounded up from PSP+80h), ds = di =
              * DGROUP, bx = 0 (the NE alignment shift - 4), cx = si + 200h */
             r.ss = native32_w9x_alloc_sel(lp * 16u, 0xFFFF); r.sp = 0x204;   /* w16_call pushes a far return */
+            native32_w9x_desc(r.ss)[6] &= (uint8_t)~0x40;   /* DPMI's 16-bit ss (B=0): KRNL386 keeps it as its stack (032F) */
             r.si = 0x200; r.cx = 0x400; r.bx = 0;
         }
         printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);

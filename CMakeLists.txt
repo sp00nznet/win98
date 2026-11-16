@@ -61,9 +61,12 @@ if(W16_SOURCES)
 endif()
 
 # Milestone 2, chunk 1: kernel32's QT_Thunk into lifted USER.EXE (src/w16test.c).
-# Reuses xcopy's lift (kernel32 + a program to boot with).
+# Its own lift when there (README: xcopy32 + kernel32 + gdi32 + advapi32 + user32,
+# for GDI.EXE's LoadLibrary32 of GDI32.DLL), else xcopy's (kernel32 + a program to boot with).
 if(TARGET w16 AND EXISTS ${CMAKE_SOURCE_DIR}/src/gen/xcopy/recomp_dispatch.c)
-  set(W98_GEN_w16test xcopy)
+  if(NOT EXISTS ${CMAKE_SOURCE_DIR}/src/gen/w16test/recomp_dispatch.c)
+    set(W98_GEN_w16test xcopy)
+  endif()
   w98_host(w16test src/k32host.c ${N32}/vxd32.c src/w16test.c ${PCRECOMP}/runtime/win16/identity/identity.c ${PCRECOMP}/runtime/win16/identity/drv16.c)
   set_source_files_properties(src/w16test.c ${PCRECOMP}/runtime/win16/identity/identity.c ${PCRECOMP}/runtime/win16/identity/drv16.c PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/work/w16/runtime;${PCRECOMP}/runtime/win16"

@@ -199,8 +199,9 @@ static int host_main(int argc, char** argv) {
         CopyFileA(src, p, TRUE);
 #ifdef W16_IMAGE
         {   /* the 16-bit modules, which KRNL386 opens by path (its own EXE first) */
-            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE" };
-            for (int i = 0; i < 3; i++) {
+            /* and the 32-bit halves GDI.EXE/USER.EXE LoadLibrary32 (lifted into this host) */
+            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL" };
+            for (int i = 0; i < 5; i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
             }
