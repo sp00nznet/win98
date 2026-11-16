@@ -215,8 +215,14 @@ static int host_main(int argc, char** argv) {
         char img[MAX_PATH];
         _snprintf(img, sizeof img - 1, "%s\\%s", dir, g_mods[i].name);
         img[MAX_PATH - 1] = 0;
+#ifdef W16_IMAGE
+        native32_hold_range(0x10000, 0x100000);   /* Win16 identity: real-mode memory at paragraph * 16 */
+#endif
         native32_hold_image(img, g_mods[i].base);
     }
+#ifdef W16_IMAGE
+    { uint32_t w16_real_base(void); w16_real_base(); }
+#endif
     {   /* the guest never writes the user's registry (pcrecomp regbox32.c) */
         if (!native32_registry_sandbox("w98\\" APP_NAME)) { fprintf(stderr, "no registry sandbox: not running\n"); return 1; }
     }

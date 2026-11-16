@@ -71,4 +71,8 @@ if(TARGET w16 AND EXISTS ${CMAKE_SOURCE_DIR}/src/gen/xcopy/recomp_dispatch.c)
   target_compile_definitions(w16test PRIVATE APP_EXE="xcopy32.mod" APP_NAME="xcopy" APP_BASE=0x00400000u RECOMP_TRACE=1
                              W16_IMAGE="${CMAKE_SOURCE_DIR}/work/w16/mem_image.bin")
   target_link_libraries(w16test PRIVATE dbghelp w16)
+  # Win16 identity holds 0x10000-0x10FFFF in its relaunch (native32_hold_range):
+  # with /DYNAMICBASE:NO the suspended child already has its process
+  # parameters and heaps bottom-up there; an ASLR image moves them.
+  target_link_options(w16test PRIVATE /DYNAMICBASE)
 endif()

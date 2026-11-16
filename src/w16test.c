@@ -130,8 +130,28 @@ int w16_test(void) {
             *(uint16_t*)(psp + 2) = 0xA000;       /* top of memory */
             psp[0x80] = 0; psp[0x81] = 0x0D;      /* empty command tail */
             FILE* f = fopen("work/sys/KRNL386.EXE", "rb");   /* the load module (past the 512-byte MZ header) at PSP+10h */
-            if (f) { fseek(f, 0x200, SEEK_SET); fread(psp + 0x100, 1, 0x40000, f); fclose(f); }
+            if (f) {
+                fseek(f, 0x200, SEEK_SET); fread(psp + 0x100, 1, 0x40000, f);
+                /* KERNEL's segments where DOS loaded them: load module +
+                 * (file offset - 200h), with the image's relocated bytes, so
+                 * GlobalInit's paragraph*16 arithmetic holds (identity low layout) */
+                uint8_t h[0x40]; uint16_t ne;
+                fseek(f, 0x3C, SEEK_SET); fread(&ne, 2, 1, f);
+                fseek(f, ne, SEEK_SET); fread(h, 1, sizeof h, f);
+                uint16_t st = *(uint16_t*)(h + 0x22), al = *(uint16_t*)(h + 0x32);
+                for (int s = 1; s <= 4; s++) {
+                    uint16_t e[4];
+                    fseek(f, ne + st + (s - 1) * 8, SEEK_SET); fread(e, 2, 4, f);
+                    uint8_t* at = psp + 0x100 + ((uint32_t)e[0] << al) - 0x200;
+                    memcpy(at, g_img + SEG_SEGMENT_BASE[s], e[1]);
+                    native32_w9x_set_sel(SEL(s), (uint32_t)(uintptr_t)at, 0xFFFF, 1);
+                }
+                fclose(f);
+            }
             r.ax = 0x4B4F; r.es = 0x1000;
+            /* DOS's ss:sp from the MZ header (e_ss 0Eh, e_sp 80h, load module
+             * at paragraph 1010h): GlobalInit's first arena starts past it */
+            r.ss = native32_w9x_alloc_sel((0x1010u + 0x0E) * 16, 0xFFFF); r.sp = 0x80;
         }
         printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);
         int w16_call(CPU*);
