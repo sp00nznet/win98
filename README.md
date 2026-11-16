@@ -14,7 +14,7 @@ copy (extracted CAB files, catalogs, lifted C) goes into the gitignored
 |---|---|---|
 | 1 | Survey of the kernel boundary (`tools/survey.py`) | VxDCall gate, flat-thunk tables, 16-bit int 21h/2Fh/31h mapped |
 | 2 | PE accessories on native32 against host DLLs | calc and notepad run (winmine/sol/freecell are Win16 on 98) |
-| 3 | console program on Win98's own kernel32 + vwin32 shim | kernel32 boots fully; xcopy32 starts through its CreateProcess, stops in console set-up |
+| 3 | console program on Win98's own kernel32 + vwin32 shim | milestone 1: `xcopy32 /?` prints its own help (exactly its string resources) and `xcopy32 C:\TEST\SRC C:\TEST\DST /S /I` copies a tree in the sandbox, byte-identical |
 | 4 | GUI on lifted user32/gdi32 + USER.EXE/GDI.EXE via recomp16 | not started |
 
 ## Building
@@ -34,3 +34,14 @@ py -3 tools\hiddenrun.py --secs 7 --shot 5 --out shots\calc -- build\calc.exe --
 
 The guest's registry is boxed (pcrecomp regbox32) under
 `HKCU\Software\pcrecomp\w98\<app>`.
+
+xcopy32 on Win98's own lifted kernel32 (milestone 1):
+
+```
+py -3 tools\lift.py xcopy work\sys\xcopy32.mod work\sys\kernel32.dll
+sh tools/run_xcopy.sh -- /?
+sh tools/check_m1.sh        # /? against the string resources, then a /S /I copy
+```
+
+The guest's C:\ is `work/root`. Its console is the host's stdout, and its
+hard errors (kernel32's USER32!MessageBoxA) are logged, never shown.

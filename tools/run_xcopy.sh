@@ -12,6 +12,7 @@
 cd "$(dirname "$0")/.." || exit 1
 cmd //d //c "$(cygpath -w "$PWD")\\build.cmd" --target xcopy 2>&1 | grep -E "error C|FAILED"
 [ -n "$VXD" ] && export NATIVE32_VXD=1
+export MSYS2_ARG_CONV_EXCL="*"   # keep /S, /I as they are (MSYS would make them paths)
 PCRECOMP_MUTE=1 timeout 30 build/xcopy.exe --mute --watchdog 10 "$@" > work/run.txt 2>&1
 rc=$?
 grep -v '^\[native32\]\|^\[bind\]' work/run.txt | tail -${TAIL:-30}

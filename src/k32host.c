@@ -25,7 +25,7 @@ uint32_t native32_vwin32_r0_table(void);   /* vxd32.c */
 void native32_w9x_ldt(uint16_t alias_sel, uint32_t* ldt_base);
 uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
 extern uint16_t g_w9x_psp_sel;
-uint32_t native32_w9x_krnl386_thunk(void), native32_w9x_user_signal_proc(void);
+uint32_t native32_w9x_krnl386_thunk(void), native32_w9x_user_signal_proc(void), native32_w9x_message_box(void);
 
 #define K32_BASE 0xBFF70000u
 static native32_module_t g_mods[] = { { APP_EXE, APP_BASE }, { "kernel32.dll", K32_BASE } };
@@ -100,7 +100,13 @@ static int write_proxy_dll(const char* path, const char* dll, uint32_t base, con
     uint32_t va[512];
     int m = 0;
     HMODULE h = LoadLibraryA(dll);
-    for (int i = 0; i < n && m < 512; i++) { FARPROC f = h ? GetProcAddress(h, names[i]) : NULL; if (f) { all[m] = names[i]; va[m++] = (uint32_t)(uintptr_t)f; } }
+    for (int i = 0; i < n && m < 512; i++) {
+        int x = 0;
+        while (x < nx && strcmp(xnames[x], names[i])) x++;
+        if (x < nx) continue;                /* a stand-in replaces it below */
+        FARPROC f = h ? GetProcAddress(h, names[i]) : NULL;
+        if (f) { all[m] = names[i]; va[m++] = (uint32_t)(uintptr_t)f; }
+    }
     for (int i = 0; i < nx && m < 512; i++) { all[m] = xnames[i]; va[m++] = xva[i]; }
     for (int i = 1; i < m; i++)              /* the loader binary-searches the names */
         for (int j = i; j > 0 && strcmp(all[j - 1], all[j]) > 0; j--) {
@@ -335,11 +341,12 @@ static int host_main(int argc, char** argv) {
         {   /* USER32: the host's, behind a proxy kernel32 can load */
             const char* nm[256];
             int n = imports_from(APP_BASE, "USER32.DLL", nm, 256);
-            static const char* const xn[] = { "UserSignalProc" };
-            uint32_t xv[] = { native32_w9x_user_signal_proc() };
+            /* MessageBoxA: kernel32's hard errors, answered in vxd32 (logged, never shown) */
+            static const char* const xn[] = { "UserSignalProc", "MessageBoxA" };
+            uint32_t xv[] = { native32_w9x_user_signal_proc(), native32_w9x_message_box() };
             char path[MAX_PATH];
             _snprintf(path, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", g_root_host);
-            if (n && !write_proxy_dll(path, "user32.dll", 0x30000000u, nm, n, xn, xv, 1)) { fprintf(stderr, "no USER32 proxy\n"); return 1; }
+            if (n && !write_proxy_dll(path, "user32.dll", 0x30000000u, nm, n, xn, xv, 2)) { fprintf(stderr, "no USER32 proxy\n"); return 1; }
         }
         uint32_t w16 = MEM32(0xBFFC9470u);
         native32_call_guest(0xBFF741EDu, 1, &w16);

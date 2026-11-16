@@ -43,8 +43,8 @@ kernel32 (lifted, at its fixed 0xBFF70000: kernel32 has no relocations, so it
 is not rebased) and boots kernel32 the way VWIN32 does. kernel32's whole boot
 now runs (first thread, its service thread on a second host thread, NLS
 tables, registry) and returns; the host then starts xcopy32 through
-kernel32's own `CreateProcessA`, whose main thread runs as a guest thread
-into the console set-up. See "Session 2" below for where it stops.
+kernel32's own `CreateProcessA`; xcopy32 runs to its own ExitProcess (milestone
+1, "Session 3" below).
 
     py -3 tools/lift.py xcopy work/sys/xcopy32.mod work/sys/kernel32.dll
     sh tools/run_xcopy.sh [host options] [-- xcopy args]    # log: work/run.txt
@@ -209,6 +209,76 @@ a VxD's objects with fixups applied, for when that is unpacked.
 Not done (asked for): guest hard errors (none raised yet); Int21 3Ch/3Dh
 (plain create/open) and 4Eh/4Fh (8.3 find) are not answered, only the LFN
 71xx ones kernel32 has used so far.
+
+### Session 3 (pcrecomp w98 aaf7dc0+, win98 cef2fe5+): milestone 1
+
+**What runs.** `sh tools/run_xcopy.sh -- /?` prints xcopy's help on the
+host's stdout, exactly string resources 4 + 27 of xcopy32.mod (and its final
+CRLF), then `[boot] xcopy32.mod exited with 0`. `sh tools/run_xcopy.sh --
+C:\TEST\SRC C:\TEST\DST /S /I` prints `A.TXT B.BIN SUB\C.TXT  3 File(s)
+copied`, exit 0, and the copy is byte-identical (DOS times: 2 s steps).
+`sh tools/check_m1.sh` checks both. No windows: the console is stdout.
+
+**The PDB+40 fault was not the PDB.** 0xBFFA2100 (attach a process to its
+console) gets the console *object*, VCOND 1F's result, and reads its +40.
+On Win98 that object is built by kernel32 itself when CONAGENT calls back in
+(16-bit entry 0xBFF941D9 -> 0xBFF8E9E1(info, word)): 470h bytes, crst at
++20, two buffers at +40/+44, +150 the VCOND handle (VCOND 2), +46C an event;
+the constructor also sets the current process's +B0. vxd32's VCOND 1F now
+runs that constructor on the calling thread (registers saved, +B0 put
+back). So the scheduling question did not matter here: a thread still
+starts when it is made ready (VWIN32 A), and nothing so far needed it to
+wait for a resume.
+
+**Threads, continued.** (1) VWIN32's current triple now follows the machine
+(native32_on_enter, called on the outermost mach_enter): a back-edge
+hand-over switched threads without vxd32 knowing, and kernel32 ran a thread
+under another's TDBX. (2) A TDBX is {+0 thread, +4 process}. (3) Waits list
+kernel32 objects or wait blocks; an object's +4 is its block, and 60/61/62
+(SetEvent, PulseEvent, ResetEvent: 0xBFF92D66..88) set +4 of the block and
+wake its waiters. That is how the host's WaitForSingleObject(process) ends.
+(4) Thread ends: B (terminate: a call for the current thread, otherwise
+queued and run at that thread's next wake), 2B (done: parked for good), D
+(queue fn(arg) to the service thread: run now, on the caller).
+
+**Win9x's low 64 KB.** A dying last thread frees its own context (+58 = 0)
+and its process teardown then reads [0+38h] (0xBFF7D65E): Win9x maps the
+first 64 KB readable. vxd32's first-chance handler emulates lifted loads
+from there as 0 (stores dropped): mov/movzx/movsx forms only, logged under
+VXD=1 (six per run). Ceiling: it would also hide a real null read.
+The same handler commits reserved pages on first touch (thread stacks
+grow that way: kernel32 commits the top two pages only).
+
+| id | name (from use) | args | answer |
+|---|---|---|---|
+| 00010007 | VMM context destroy (PDB+1C) | 1 | 1 |
+| 00010020 | (block's last hand-over to ring 0: mapped-file record, dying process) | 1 | 0 |
+| 002A000B | terminate thread (r0, blk {thread, -, 0xBFF89302}) | 2 | call / queue |
+| 002A000D | queue fn(arg) to a thread (the service thread) | 3 | run now |
+| 002A002B | thread done (never returns) | 0 | parked |
+| 002A0040 | VirtualQuery (r0, addr, &mbi, 1Ch) | 4 | host VirtualQuery |
+| 002A0041 | value into a context (ExitProcess) | 2 | the value |
+| 002A0058 | dying thread's +58 handed back | 1 | 0 |
+| 002A005C | wait on one block/object (blk, ms, alertable) | 3 | as 5D |
+| 002A0060/61/62 | SetEvent / PulseEvent / ResetEvent (blk) | 1 | +4, wake |
+| 00380001 | VCOND teletype write (h, buf, n) | 3 | host stdout |
+| 00380002 | VCOND register console (info, obj) -> handle | 2 | obj |
+| 0038000A/0C/0D/0E/13/14/17/18/1B/1E | VCOND console state, agent posts, attach/detach | 1-3 | 0 |
+| KRNL386 31/33/34/43/55 | delete task, new process's KRNL386 part, FreeSelector, process gone, thread selector gone | | 0 (33: 1) |
+| Int21 1A 2F 3C 3D 4E 4F 69 71A7 | DTA, create/open, 8.3 find, volume serial (fixed 1998-0505, "NO NAME", FAT32), time conversion | | boxed host files |
+
+**Hard errors.** kernel32 shows them with USER32!MessageBoxA, bound lazily
+through its own table (0xBFFCB2C4; FatalAppExit, load/teardown failures).
+The USER32 proxy's MessageBoxA is a vxd32 stand-in: `[hard error] "cap":
+"text"` on stderr, answer OK/Cancel/Abort/No. Not triggered yet by xcopy.
+VWIN32's own Int24-style errors cannot happen: Int21 failures come back
+as codes.
+
+**Next step.** Milestone 2 candidates: more console programs on the same
+kernel32 (the VCOND input side, 03-09/24-2C, for `/P` and the overwrite
+prompt: map onto stdin), then a GUI guest (stage 4). Open ends: VWIN32 D
+runs on the caller, not the service thread; B to a thread that is not in a
+w9x_wait waits for its next one; FreeSelector does not reuse selectors.
 
 ### Session 1's list (1 is done; 2 and 3 are open)
 
