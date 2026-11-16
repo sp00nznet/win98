@@ -720,3 +720,64 @@ functions. Worth making a W16_ARENAS=fn option.
 frame's rewritten ip are not followed by the code map (seeded by hand). The
 rebind trigger is the first far call; data-only use of a not-yet-called
 segment of another module would still see the old selector.
+
+### Session 8: BootStrap past the BIOS setup, into kernel32's own boot entry (handoff)
+
+pcrecomp w98 b473aa3; win98 (this commit).
+
+**The "spin" was not a BIOS scan.** After int 31h 0002, seg 3 (15E7) walks
+a list at DGROUP:1BD2 through `cs:[2]`; seg 3 had never been far-called, so
+SEG_3 was still its placeholder and cs:[2] read the private file copy
+(FFFF -> ds 0, a list of zeros). Fix: identity mode emits `W16_SEGIN(n)`
+before every direct far call into another segment; on a placeholder it
+rebinds n from the module database (through any bound segment of the same
+module). Second bug behind it: KRNL386 writes the LDT itself (alias from
+int 2Fh 168Ah), so vxd32's bump allocator handed int 31h 0002 the
+selector of KERNEL's module database (033F -> base C0000h). alloc_sel now
+skips non-empty descriptors.
+
+**Low megabyte.** Linear 0-FFFFh cannot be mapped on Win11; cpu.h
+`w16_lin` sends those addresses to a host block (identity only). It holds
+an IVT (all F000:FF53, an iret), a BIOS data area (VGA colour 80x25,
+640 KB, LPT1, empty keyboard buffer), C0000-EFFFF = FFh (no option ROMs),
+the F000 reset jump/date/model FCh.
+
+**kernel32 boot handshake (BootStrap's seg001_6A3F).** VWIN32 ah=0 must
+give edx != 0 (kernel32's base, a guess); KRNL386 then reads kernel32's
+export block 'KEXP' (kernel32 0xBFF71000, its first section) at **flat
+1000h** and stores DGROUP:1AC7's linear address through KEXP+4 (into
+kernel32, 0xBFFC974A): the host copies the block to the low block on
+ah=0. Then int 2Fh 168D (es:di, unchecked: 0:0), VTDAPI (0442) ax=9, VWIN32
+ah=4, and seg001_6500 calls KEXP entry 3 (kernel32 0xBFFC7AE4) by an o32
+retf on a flat stack. The lifter now emits `w16_retf32` for 66 CB; the
+runtime calls the lifted 32-bit function and does the work of KRNL386's
+flat return stub (1:656C: ss=di, sp=esp-esi, push ss, FFFF, ebx; retf to
+1:7A58). push/pop use esp on a flat stack (B bit and base 0; the host
+sets B on every data selector it allocates, QT_Thunk's alias stack too).
+
+**Where it stands.** kernel32's 0xBFFC7AE4 runs and calls back into
+KRNL386's own 32->16 entry 1:6582 (through DGROUP:1AC7+28h; seeded),
+w16_enter's flat-stack branch. 6582 reads the Win98 TIB through fs:
++0E 16-bit stack selector, +18 self, +1C flags (bit 0 picks the path).
+The host thread's TIB (fs 00FF) has +0E 02BF, +18 8B002F5C, +1C 48D8: not
+what KRNL386 expects, and it faults. Next: give the boot thread a TIB
+KRNL386 can read (ptibSelf at +18, TIBFlags, ss16), or decide that this
+entry is kernel32 re-initialising what the host already built and answer
+0xBFFC7AE4 at the host. That is the design fork for SlowBoot: until now
+kernel32's 32->16 thunks go to vxd32's KRNL386 stand-in
+(`call [0xBFF9AD46]`); with real KRNL386 booting, kernel32 should reach
+KRNL386 through KEXP's table instead.
+
+Not reached: SlowBoot (drivers, GDI, USER), task 3 (calc), the display
+stand-in.
+
+**pcrecomp gaps.** ne_codemap now follows `push sel; push imm; retf` and
+`mov r,imm; push r; retf` (1:B711 is no longer a seed). Still seeded:
+exception resume addresses (1:B9E8) and code addresses KRNL386 stores at
+run time (1:6582). W16_SEGIN covers direct calls; data use of another
+module's unbound segment still sees the placeholder.
+
+**Regression.** johnny and civnet relift in scratch trees with d176051 and
+b473aa3: lifted C identical (civnet's ne_link rc=1 is pre-existing).
+check_m1 and check_w16 pass. Not rebuilt with MinGW (C identical; cpu.h
+changes are identity-only macros).
