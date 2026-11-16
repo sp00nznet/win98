@@ -1315,3 +1315,71 @@ ponytail (this session):
 scratch trees with 9786305 and f08aa41: identical C and mem_image.bin;
 identity mode (NE_IDENTITY_SEL=1) differs only by the intended lines (one
 iret in johnny, civnet's 2 DLL prologues, segments.h's g_w16_callseg).
+
+### Session 16: MSGSRV32 loads, BootStrap reaches the scheduler, the first task switch (handoff)
+
+pcrecomp w98 26f04d2; win98 this commit. Relink work/w16 (ne_lift, lift16
+changed; README's ne_link line now ends in MSGSRV32.EXE).
+
+**MSGSRV32.EXE is 16-bit (NE, 47 functions)**, not Win32: it is lifted by
+ne_link with the other modules (lifted segs 89-90) and k32host copies it
+into work/root\WINDOWS\SYSTEM. KRNL386's LoadModule now opens, reads and
+loads it; the guest's SYSTEM.INI (w16test writes it each run) says
+shell=calc.exe.
+
+**Then, in order (all generic).**
+- ret-jump calls: KRNL386 seg1 852A (its int 21h hook, called as
+  `pushf; push cs; call 852A`) `xchg [bp-4], bx; ...; ret`s into the
+  handler, whose iret/`retf 2` comes back to the call. In C the call
+  returned at the ret and the handler never ran (_lread's 9FC3 then
+  surfaced as "near ret under a far call"). ne_lift (identity) marks
+  functions whose near ret is reached with their own words still pushed
+  (same path walk as popsret); their call sites run w16_retjump(seg, ip):
+  dispatch what ret_ip names until something returns to ip.
+- the identity iret records ret_ip (johnny's one iret line differs).
+- `push cs; push imm; jmp near f` (or `mov ax, imm; push ax`): a far call
+  to f, back at imm. BootStrap ends `push cs; push 5E13; jmp 3A0E` into
+  Reschedule; as a tail call 3A0E's retf left KRNL386 (LibMain returned).
+- vxd32 int 21h 55h (create child PSP at DX: copy of the current, SI top,
+  parent = current, becomes current), 41h (delete, boxed: KRNL386 deletes
+  WINDOWS\WNBOOTNG.STS), VWIN32 13 (after kernel32 creates its service
+  thread, 0xBFF91A8E), REBOOT 0 (that thread's Ctrl+Alt+Del callback).
+- VWIN32 16-bit API 01 (KRNL386 seg1 73BA; Reschedule 5F54, the boot
+  thread's idle loop 7404): ebx = the next task's r0 thread. It is a task
+  switch: native32_w9x_switch_to starts the thread if new (kernel32 made
+  MSGSRV32's thread 0588270C suspended, C0DE0002) or sets its wake event,
+  and the caller sleeps on its own wake event until switched back.
+- k32host's watchdog dumps the main thread's C stack (dbghelp), so a hang
+  names its lifted function (that is how the ret-jump loop was found).
+
+**Where it stops.** After the boot thread switches to MSGSRV32's thread,
+the machine goes first to a thread readied long before and never run
+(05DA22B0, made by 16-bit code through kernel32 BFF93F47 during USER's
+init, entry 0xBFF712C6 with a 16:16 target). It enters KRNL386 at 687A
+with ss:esp 0000:0000FFBC: its 32-bit esp is already a 16-bit offset when
+BFF712C6 runs (low-memory reads at FFBC), so something in its start
+(0xBFF74B0D / 0xBFF8CAEC / 0xBFF88BF2, before the `retf` into 16-bit)
+moved esp onto a stack whose ss base the lifted code takes as 0, or the
+thread proc's parameter is a 16-bit pointer. USER's seg 1 0740 then calls
+kernel32 BFF93F90 (cx 78h) and the 16->32 stub builds its flat esp from
+ss 116F's LDT base, also 0 -> fault in recomp_farcall32 (esp FED0).
+Look at: what 116F's descriptor holds when the stub runs (g_ldt), and who
+sets TIB+E = 116F for that thread (kernel32 0xBFF8CAEC?). MSGSRV32's own
+thread (0588270C, entry BFF72170) has not run yet.
+
+Not reached: calc (task 2), input (task 3), SYSTEM timer callbacks,
+EventCreate Set/Wait, VWIN32 0901.
+
+ponytail (this session):
+- w16_retjump: 256 hops, then a stop.
+- ret-jump detection: same limits as popsret (enter, calls, sp writes end
+  a path); 40-odd functions marked across KRNL386/GDI/USER.
+- int 21h 55h: the job file table is shared, not duplicated.
+- VWIN32 13: meaning unknown, answered 0 (result not read).
+- REBOOT 0: callback kept nowhere.
+- VWIN32 01: ecx (0 or F01h) not read; every switch blocks the caller
+  until woken (the callers loop and re-check).
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet relift in
+scratch trees (s16-*, f08aa41 vs 26f04d2): normal mode identical C and
+mem_image.bin; identity mode differs only by johnny's iret line.

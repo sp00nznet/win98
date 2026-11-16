@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Milestone 2, session 16: Win98's MSGSRV32.EXE (16-bit) lifted and loaded by
+  KRNL386's LoadModule; BootStrap runs into Reschedule and makes the first
+  task switch (VWIN32 01) to MSGSRV32's thread (pcrecomp: ret-jump calls,
+  iret ret_ip, push cs:imm; jmp as a far call, int 21h 41/55h). Stops in a
+  USER-made thread whose start runs on a 16-bit stack offset.
 - Milestone 2, session 14: user32's LoadLibrary16("USER.EXE") succeeds
   (USER's DllEntryPoint ThunkConnect16s to MPR.DLL, now lifted into
   w16test; pcrecomp: retf-into-pushed-far-call, 67h [bx] in 32-bit code,

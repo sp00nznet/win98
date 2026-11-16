@@ -42,6 +42,23 @@ void recomp_not_lifted(uint32_t va) {
 recomp_func_t native32_w9x_lookup(uint32_t va);   /* vxd32.c: VWIN32's ring-0 entries */
 recomp_func_t recomp_lookup_manual(uint32_t va) { return native32_w9x_lookup(va); }
 
+/* The C callers from a thread context (dbghelp, with lines). */
+static void dump_stack(HANDLE th, CONTEXT c, int n) {
+    IMAGEHLP_LINE64 ln = { sizeof ln };
+    DWORD disp = 0;
+    STACKFRAME64 sf = { 0 };
+    sf.AddrPC.Offset = c.Eip; sf.AddrFrame.Offset = c.Ebp; sf.AddrStack.Offset = c.Esp;
+    sf.AddrPC.Mode = sf.AddrFrame.Mode = sf.AddrStack.Mode = AddrModeFlat;
+    for (int i = 0; i < n && StackWalk64(IMAGE_FILE_MACHINE_I386, GetCurrentProcess(), th, &sf, &c,
+                                         NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL); i++) {
+        char sb[sizeof(SYMBOL_INFO) + 128]; SYMBOL_INFO* si = (SYMBOL_INFO*)sb; DWORD64 d64 = 0;
+        si->SizeOfStruct = sizeof(SYMBOL_INFO); si->MaxNameLen = 127;
+        fprintf(stderr, "    #%d %s", i, SymFromAddr(GetCurrentProcess(), sf.AddrPC.Offset, &d64, si) ? si->Name : "?");
+        if (SymGetLineFromAddr64(GetCurrentProcess(), sf.AddrPC.Offset, &disp, &ln)) fprintf(stderr, " %s:%lu", ln.FileName, ln.LineNumber);
+        fputc('\n', stderr);
+    }
+}
+
 static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     EXCEPTION_RECORD* r = ep->ExceptionRecord;
     HMODULE hm;
@@ -62,18 +79,7 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
             SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)(uintptr_t)r->ExceptionAddress, &disp, &ln))
             fprintf(stderr, "  at %s:%lu\n", ln.FileName, ln.LineNumber);
         /* the callers: which lifted 16-bit block the inlined accessor was in */
-        CONTEXT c = *ep->ContextRecord;
-        STACKFRAME64 sf = { 0 };
-        sf.AddrPC.Offset = c.Eip; sf.AddrFrame.Offset = c.Ebp; sf.AddrStack.Offset = c.Esp;
-        sf.AddrPC.Mode = sf.AddrFrame.Mode = sf.AddrStack.Mode = AddrModeFlat;
-        for (int i = 0; i < 8 && StackWalk64(IMAGE_FILE_MACHINE_I386, GetCurrentProcess(), GetCurrentThread(), &sf, &c,
-                                             NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL); i++) {
-            char sb[sizeof(SYMBOL_INFO) + 128]; SYMBOL_INFO* si = (SYMBOL_INFO*)sb; DWORD64 d64 = 0;
-            si->SizeOfStruct = sizeof(SYMBOL_INFO); si->MaxNameLen = 127;
-            fprintf(stderr, "    #%d %s", i, SymFromAddr(GetCurrentProcess(), sf.AddrPC.Offset, &d64, si) ? si->Name : "?");
-            if (SymGetLineFromAddr64(GetCurrentProcess(), sf.AddrPC.Offset, &disp, &ln)) fprintf(stderr, " %s:%lu", ln.FileName, ln.LineNumber);
-            fputc('\n', stderr);
-        }
+        dump_stack(GetCurrentThread(), *ep->ContextRecord, 8);
     }
     native32_dump_icalls(12);
     fprintf(stderr, "  9CE0=%08X 9CE8=%08X 9D10=%08X 9CEC=%08X\n", MEM32(0xBFFC9CE0u), MEM32(0xBFFC9CE8u), MEM32(0xBFFC9D10u), MEM32(0xBFFC9CECu));
@@ -83,10 +89,17 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+static HANDLE g_main_th;
 static DWORD WINAPI watchdog(LPVOID unused) {
     (void)unused;
     Sleep(g_watchdog_s * 1000);
     fprintf(stderr, "\n[watchdog] %lu s: in sub_%08X, last native call %s\n", g_watchdog_s, g_cur_func, g_cur_import);
+    if (g_main_th && SuspendThread(g_main_th) != (DWORD)-1) {   /* where the main thread is */
+        CONTEXT c = { 0 };
+        c.ContextFlags = CONTEXT_FULL;
+        SymSetOptions(SYMOPT_LOAD_LINES);
+        if (GetThreadContext(g_main_th, &c) && SymInitialize(GetCurrentProcess(), NULL, TRUE)) dump_stack(g_main_th, c, 24);
+    }
     fflush(stderr);
     TerminateProcess(GetCurrentProcess(), 4);
     return 0;
@@ -214,7 +227,7 @@ static int host_main(int argc, char** argv) {
         {   /* the 16-bit modules, which KRNL386 opens by path (its own EXE first) */
             /* and the 32-bit halves GDI.EXE/USER.EXE LoadLibrary32 (lifted into this host;
              * MPR.DLL: USER's DllEntryPoint ThunkConnect16s USER.EXE <-> MPR.DLL) */
-            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL", "DDEML.DLL", "MPR.DLL" };
+            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL", "DDEML.DLL", "MPR.DLL", "MSGSRV32.EXE" };
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
@@ -273,7 +286,10 @@ static int host_main(int argc, char** argv) {
     if (!native32_modules_map(dir, dir, g_mods, NMODS)) return 1;
     int missing = native32_modules_bind(NULL, 0);
     if (missing) fprintf(stderr, "warning: %d imports unresolved\n", missing);
-    if (g_watchdog_s) CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
+    if (g_watchdog_s) {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_main_th, 0, FALSE, DUPLICATE_SAME_ACCESS);
+        CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
+    }
 
     uint32_t* kexp = (uint32_t*)(uintptr_t)(K32_BASE + 0x1000);
     if (kexp[0] != 0x5058454Bu) { fprintf(stderr, "kernel32: no KEXP header\n"); return 1; }

@@ -198,7 +198,7 @@ int w16_test(void) {
                 if (ini) {
                     fputs("[boot]\nsystem.drv=system.drv\nkeyboard.drv=keyboard.drv\nmouse.drv=mouse.drv\n"
                           "display.drv=display.drv\ncomm.drv=comm.drv\nsound.drv=mmsound.drv\n"
-                          "fonts.fon=vgasys.fon\nfixedfon.fon=vgafix.fon\noemfonts.fon=vgaoem.fon\nshell=Explorer.exe\n"
+                          "fonts.fon=vgasys.fon\nfixedfon.fon=vgafix.fon\noemfonts.fon=vgaoem.fon\nshell=calc.exe\n"
                           "\n[boot.description]\ndisplay.drv=pcrecomp host display\n", ini);
                     fclose(ini);
                 }
