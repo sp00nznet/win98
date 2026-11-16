@@ -36,3 +36,9 @@ w98_host(notepad src/apphost.c)
 if(TARGET notepad)
   target_compile_definitions(notepad PRIVATE APP_EXE="notepad.exe" APP_BASE=0x00400000u)
 endif()
+
+# Milestone 1: xcopy32 on Windows 98's own lifted kernel32, VxD calls answered by vxd32.c
+w98_host(xcopy src/k32host.c ${N32}/vxd32.c)
+if(TARGET xcopy)
+  target_compile_definitions(xcopy PRIVATE APP_EXE="xcopy32.mod" APP_NAME="xcopy" APP_BASE=0x00400000u RECOMP_TRACE=1)
+endif()
