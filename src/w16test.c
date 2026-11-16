@@ -129,12 +129,20 @@ int w16_test(void) {
             psp[0] = 0xCD; psp[1] = 0x20;         /* int 20h */
             *(uint16_t*)(psp + 2) = 0xA000;       /* top of memory */
             psp[0x80] = 0; psp[0x81] = 0x0D;      /* empty command tail */
+            {   /* the environment, then (DOS 3+) a word 1 and the program's own path,
+                 * which KRNL386 opens: at paragraph A000h, above its arena */
+                static const char env[] = "PATH=C:\\WINDOWS;C:\\WINDOWS\\COMMAND\0windir=C:\\WINDOWS\0\0\1\0C:\\WINDOWS\\SYSTEM\\KRNL386.EXE";
+                memcpy(rm + 0xA0000, env, sizeof env);
+                *(uint16_t*)(psp + 0x2C) = 0xA000;
+            }
             FILE* f = fopen("work/sys/KRNL386.EXE", "rb");   /* the load module (past the 512-byte MZ header) at PSP+10h */
             if (f) {
                 fseek(f, 0x200, SEEK_SET); fread(psp + 0x100, 1, 0x40000, f);
-                /* KERNEL's segments where DOS loaded them: load module +
-                 * (file offset - 200h), with the image's relocated bytes, so
-                 * GlobalInit's paragraph*16 arithmetic holds (identity low layout) */
+                /* KERNEL's selectors point at its segments where DOS loaded them:
+                 * load module + (file offset - 200h), so GlobalInit's
+                 * paragraph*16 arithmetic holds (identity low layout). The bytes
+                 * stay the file's: KRNL386 applies its own fixups (0DED walks
+                 * each chain from the raw bytes), so relocated ones break it. */
                 uint8_t h[0x40]; uint16_t ne;
                 fseek(f, 0x3C, SEEK_SET); fread(&ne, 2, 1, f);
                 fseek(f, ne, SEEK_SET); fread(h, 1, sizeof h, f);
@@ -143,15 +151,17 @@ int w16_test(void) {
                     uint16_t e[4];
                     fseek(f, ne + st + (s - 1) * 8, SEEK_SET); fread(e, 2, 4, f);
                     uint8_t* at = psp + 0x100 + ((uint32_t)e[0] << al) - 0x200;
-                    memcpy(at, g_img + SEG_SEGMENT_BASE[s], e[1]);
                     native32_w9x_set_sel(SEL(s), (uint32_t)(uintptr_t)at, 0xFFFF, 1);
                 }
                 fclose(f);
             }
             r.ax = 0x4B4F; r.es = 0x1000;
-            /* DOS's ss:sp from the MZ header (e_ss 0Eh, e_sp 80h, load module
-             * at paragraph 1010h): GlobalInit's first arena starts past it */
-            r.ss = native32_w9x_alloc_sel((0x1010u + 0x0E) * 16, 0xFFFF); r.sp = 0x80;
+            /* what KRNL386's MZ stub (the load module's first bytes, entered by
+             * DOS) hands BootStrap: ss = the load module's paragraph (1010h),
+             * sp = si = 200h (its NE header, rounded up from PSP+80h), ds = di =
+             * DGROUP, bx = 0 (the NE alignment shift - 4), cx = si + 200h */
+            r.ss = native32_w9x_alloc_sel(0x1010u * 16, 0xFFFF); r.sp = 0x204;   /* w16_call pushes a far return */
+            r.si = 0x200; r.cx = 0x400; r.bx = 0;
         }
         printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);
         int w16_call(CPU*);

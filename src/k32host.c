@@ -197,6 +197,15 @@ static int host_main(int argc, char** argv) {
         CopyFileA(src, p, TRUE);
         _snprintf(src, MAX_PATH, "%s\\%s", dir, APP_EXE); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\COMMAND\\%s", r, APP_EXE);
         CopyFileA(src, p, TRUE);
+#ifdef W16_IMAGE
+        {   /* the 16-bit modules, which KRNL386 opens by path (its own EXE first) */
+            static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE" };
+            for (int i = 0; i < 3; i++) {
+                _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
+                CopyFileA(src, p, TRUE);
+            }
+        }
+#endif
         {   /* the NLS tables kernel32 maps at boot (unicode.nls, c_<cp>.nls, ...) */
             WIN32_FIND_DATAA fd;
             HANDLE f;
