@@ -471,3 +471,29 @@ half)" items 1 (ThunkConnect32 / kernel32 ordinal 90: what user32's
 `table` dword holds), 2 (KRNL386 boot data, then USER/GDI LibMain with
 16-bit int 21h/31h/2Fh onto vxd32) and 3 (a real user32 thunked export,
 then window creation).
+
+### Session 5: what user32's thunk words hold; seeds for MSG and GDI
+
+**Not ThunkConnect32.** user32 has no LS01 block. Its entry stubs
+(0xBFF51134 etc.) call kernel32 **ordinal 43** (0xBFF7155D) with
+(&target, "UsrThkConnectionDataLS", checksum 0x9198C): LoadLibrary16 +
+GetProcAddress16 of the 16-bit export, compare its first dword with the
+checksum, and store its second dword, a **16:16 pointer to the 16-bit
+dispatcher**, as is (flag 0; ordinal 41 passes 1 and stores MapSL of it).
+So 0xBFF5D3E0 = USER seg 32:0048. The thunks themselves are
+`mov cl,2n; mov edx,argsize; mov ch,0; mov eax,[0xBFF5D3E0]; jmp ord 45`;
+ordinal 45 (0xBFF71414) takes the Win16Mutex, switches stacks, sets
+di = cx and far-calls eax. The dispatcher (`mov ax,DGROUP; mov ds,ax;
+jmp cs:[di+table]`) indexes a near-word table that runs up to the
+dispatcher. ThunkConnect32 (0xBFF72EBE) and the LS01/SL01 path at
+0xBFF72F0A belong to thunk-compiler DLLs (winmm, version, shell32...),
+not user32/gdi32.
+
+Three LS exports: USRTHKCONNECTIONDATALS (seg 32, 31 targets),
+MSGTHKCONNECTIONDATALS (seg 30, 11), GDITHKCONNECTIONDATALS (GDI seg 43,
+33). `tools/w16_seeds.py` reads them (checks the dispatcher bytes, reads
+the table base from its jmp) and writes work/seeds/w16.json; check_w16
+still passes with all three seeded. Unread: the FT_ exports
+(FT_USRFTHK 853, FT_USRF2THK 854, FT_GDIFTHK 702: {checksum, 16:16, then
+word pairs}) and the `mov cl,N; push ebp` stubs whose patched
+`mov edx,[ecx*4+X]` uses X = 0xBFF5D400 (the dword at 0xBFF512D6).
