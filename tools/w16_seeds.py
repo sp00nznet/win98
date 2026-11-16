@@ -36,6 +36,26 @@ def seeds(path):
             sys.exit(f'{nm}: target past segment {e.segment}')
         out.setdefault(str(e.segment), []).extend(hex(o) for o in offs + [disp])
         print(f'{nm}: seg {e.segment} dispatcher {disp:04X}, {len(offs)} targets', file=sys.stderr)
+    # FT_*THKCONNECTIONDATA (flat thunks: user32's second stub, 0xBFF5D474):
+    # a table of 16:16 targets after the export, each selector word on an NE
+    # selector fixup chain (src type 2) of the segment it names.
+    ft = sorted((e.segment, e.offset) for e in ne.entries
+                if (lambda n: (n[0] if isinstance(n, tuple) else n).upper())(names.get(e.ordinal, ('', 0))).startswith('FT_'))
+    for i, (sg, start) in enumerate(ft):
+        seg = ne.segments[sg - 1]
+        d = seg.data
+        end = ft[i + 1][1] if i + 1 < len(ft) and ft[i + 1][0] == sg else len(d)
+        n = 0
+        for r in seg.relocations:
+            if r.src_type != 2 or r.flags & 3 or not r.target_seg:
+                continue
+            o = r.offset
+            while o != 0xFFFF and o + 2 <= len(d):
+                if start < o - 2 < end:
+                    out.setdefault(str(r.target_seg), []).append(hex(struct.unpack_from('<H', d, o - 2)[0]))
+                    n += 1
+                o = struct.unpack_from('<H', d, o)[0]
+        print(f'FT seg {sg}:{start:04X}: {n} targets', file=sys.stderr)
     return ne.module_name, out
 
 

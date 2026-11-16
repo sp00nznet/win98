@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Milestone 2, session 17: guest threads start on their own stack selector
+  (the stray USER thread's Win16 stack was built from a 16-bit esp);
+  VWIN32 Event Wait/Set/Destroy, VMM HeapReAllocate, int 21h 50h/55h for
+  the task PSP; USER's flat-thunk targets seeded. MSGSRV32's task thread
+  runs into KRNL386's Reschedule and loops (CurTDB never moves).
 - Milestone 2, session 16: Win98's MSGSRV32.EXE (16-bit) lifted and loaded by
   KRNL386's LoadModule; BootStrap runs into Reschedule and makes the first
   task switch (VWIN32 01) to MSGSRV32's thread (pcrecomp: ret-jump calls,

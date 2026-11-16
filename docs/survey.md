@@ -1383,3 +1383,71 @@ ponytail (this session):
 **Regression.** check_m1 and check_w16 pass. johnny and civnet relift in
 scratch trees (s16-*, f08aa41 vs 26f04d2): normal mode identical C and
 mem_image.bin; identity mode differs only by johnny's iret line.
+
+### Session 17: the stray thread's stack, MSGSRV32's task thread runs; stops in KRNL386's scheduler loop (handoff)
+
+pcrecomp w98 2f6d052; win98 this commit. Rerun w16_seeds.py and ne_link
+(new seeds), then lift.py w16test.
+
+**Root cause of session 16's fault (task 1).** Not 116F's allocation and not
+kernel32 0xBFF8CAEC: every guest thread after the boot one started on a host
+thread whose ss was 0 (native32's per-thread state). The thread (USER's,
+entry 0xBFF712C6) retf's into KRNL386's 32->16 entry 1:687A; w16_enter saw
+ss 0, not a flat (big) stack, so it took the QT alias-stack path and cut esp
+to its low 16 bits (FFBC). 687A then builds the thread's Win16 stack
+selector (TDB +84h, here 116F) as base = (esp - 8000h) & ~FFFh: 7000h
+instead of 0851_7000h, which the 16->32 stub (0xBFF71903) later read back
+(flat esp FF3A). Found with W16_WSEL=116F (new: names the 16-bit function
+that first sees a selector's descriptor change). Fix (generic, vxd32): VWIN32
+8's a[6] is the stack selector of a[7]; the twin keeps it (R0T_SS) and
+guest_thread loads it before the first instruction. Per-thread 16-bit stacks
+then come out right with no other change (687A makes them itself).
+
+**Then, in order.**
+- VWIN32 16-bit API 05/06/07 (KERNEL.443 EventDestroy, 450 EventWait, 451
+  and 479 EventSet; seg1 78AB/78C7/78E3/7903): host events; Wait gives up
+  the machine (native32_w9x_wait). USER's init thread now waits there.
+- REBOOT 1 (kernel32's service thread 0xBFF91B44): no-op.
+- VMM 0C = _HeapReAllocate(block, n, flags) (a process's handle table,
+  0xBFF7D7B0).
+- USER's FT_USRFTHK flat-thunk targets were not lifted (user32's second
+  stub 0xBFF5D474 -> USER 31:01F5): w16_seeds.py now also seeds every
+  FT_*THKCONNECTIONDATA table (16:16 slots on NE selector fixup chains):
+  80 USER targets, 1 GDI.
+- VMM 1F (thread, 35h): the service thread sleeps on itself each turn.
+- MSGSRV32's thread died at once: 0xBFF8CAEC (Win16 process start) reads
+  its PSP's environment (PSP:2C) and fails on 0. KRNL386 seg2 4956 makes the
+  PSP with `SetPSP(parent); int 21h 55h`; the identity int 21h path took
+  55h's dx as a ds:dx pointer and made it flat, and 50h was dropped. Now 50h
+  sets vxd32's current PSP and 55h's dx goes through as a selector: PSP 117F
+  copies 036F's environment (0437 = kernel32's [BFFC9D24]).
+
+**Where it stops.** MSGSRV32's thread runs: BFF712C6 -> KRNL386 1:687A ->
+its 16:16 start 1:72D6 -> 1:5F57 (the code after the task switch) ->
+Reschedule (5E16) picks MSGSRV32's TDB, which is not CurTDB (DGROUP:122C,
+still the boot task's), so it switches (VWIN32 01) to its own thread, a
+no-op, and loops. Each turn of that 16-bit loop is a nested C call (the
+loop crosses function blocks: 5F21 -> 73B4 -> 5F57), and the host stack
+overflows (C00000FD). Two things to settle:
+1. who sets CurTDB on Win98 when a task's thread takes over. Only seg1 7930
+   (called from 630D when DGROUP:1417 != 0, and 8FDA) and the boot code
+   write 122C. 1417 is VWIN32 08's answer (ponytail 0 since session 9): try
+   1 there first; the VWIN32 0C entries KRNL386 registers (8D71, 0ACE,
+   0C2B, 7C44, 7CAA) are the other candidate (VWIN32 calls one on a switch?).
+2. a loop across lifted function blocks must not grow the C stack
+   (lift16: tail calls to a function that is a jump target are already
+   `f(cpu); return;`, but MSVC does not turn them into jumps; a trampoline
+   or /O2 tail-call check).
+
+Not reached: MSGSRV32's own code (seg 89/90), calc (task 2), input (task
+3), SYSTEM timer callbacks (task 4; VWIN32 0901 not called yet).
+
+ponytail (this session):
+- VWIN32 06 (EventWait): al (27h) not read; INFINITE.
+- VMM 1F: blocks on the thread's wake event; 35h not read; nothing wakes it.
+- REBOOT 1: no-op.
+- int 21h 51h/62h still answer KRNL386's fixed PSP (W16_PSP_PARA), not
+  the one 50h set.
+
+**Regression.** check_m1 and check_w16 pass. No lifter change this session
+(runtime and w16_seeds.py only), so no johnny/civnet relift.
