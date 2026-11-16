@@ -14,7 +14,7 @@ copy (extracted CAB files, catalogs, lifted C) goes into the gitignored
 |---|---|---|
 | 1 | Survey of the kernel boundary (`tools/survey.py`) | VxDCall gate, flat-thunk tables, 16-bit int 21h/2Fh/31h mapped |
 | 2 | PE accessories on native32 against host DLLs | calc and notepad run (winmine/sol/freecell are Win16 on 98) |
-| 3 | console program on Win98's own kernel32 + vwin32 shim | not started |
+| 3 | console program on Win98's own kernel32 + vwin32 shim | kernel32 boots fully; xcopy32 starts through its CreateProcess, stops in console set-up |
 | 4 | GUI on lifted user32/gdi32 + USER.EXE/GDI.EXE via recomp16 | not started |
 
 ## Building

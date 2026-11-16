@@ -40,13 +40,19 @@ Rebase and lift kernel32 with a console tool that needs only kernel32. Answer th
 
 `build/xcopy.exe` (src/k32host.c) maps xcopy32.mod and Windows 98's own
 kernel32 (lifted, at its fixed 0xBFF70000: kernel32 has no relocations, so it
-is not rebased) and boots kernel32 the way VWIN32 does. kernel32 now runs its
-own boot through the first process's creation; it stops at the first thread.
+is not rebased) and boots kernel32 the way VWIN32 does. kernel32's whole boot
+now runs (first thread, its service thread on a second host thread, NLS
+tables, registry) and returns; the host then starts xcopy32 through
+kernel32's own `CreateProcessA`, whose main thread runs as a guest thread
+into the console set-up. See "Session 2" below for where it stops.
 
-    sh work/go.sh [--calltrace work/ct.txt]     # relift with tools/lift.py first
+    py -3 tools/lift.py xcopy work/sys/xcopy32.mod work/sys/kernel32.dll
+    sh tools/run_xcopy.sh [host options] [-- xcopy args]    # log: work/run.txt
+    VXD=1 sh tools/run_xcopy.sh --calltrace work/ct.txt -- /?
 
-`NATIVE32_VXD=1` traces every service. An unknown one stops the run (exit 5)
-with its id and arguments.
+`VXD=1` (NATIVE32_VXD=1) traces every service. An unknown service, Int21
+function, ring-0 entry or KRNL386 thunk stops the run (exit 5) with its id
+and arguments. A fault prints the lifted C file and line (DbgHelp).
 
 ### How kernel32 is booted (learnt from the code)
 
@@ -115,7 +121,97 @@ order.
   through DS_BASE and string ops through ES_BASE/DS_BASE. `mov es/ds/gs` ->
   `recomp_set_seg`. Every other function stays flat.
 
-### Next
+### Session 2 (pcrecomp w98 cd4d654+, win98 5184a15+): boot done, CreateProcess runs
+
+**What runs.** `sh tools/run_xcopy.sh -- /?` boots kernel32 to the end of
+`_INIT` (`[boot] kernel32 boot returned ...`), releases the Win16Mutex, calls
+`CreateProcessA("C:\WINDOWS\COMMAND\XCOPY32.MOD /?")`, and the boot thread
+waits (VWIN32 5D) while xcopy's main thread (start 0xBFF8B15D) runs on its own
+host thread: kernel32's loader maps XCOPY32.MOD over native32's copy at
+0x400000, loads the USER32 proxy at 0x30000000, signals USER, starts the
+console agent (answered) and gets the new console's ring-0 object (VCOND 1F).
+It then faults (exit 3) in 0xBFF8DFB2 reading `[PDB+40h]` of the new process
+(0), from 0xBFFA2110. xcopy's own code has not run yet; no output.
+
+**Next step.** Find who fills a child PDB's +40 (the parent's at 0xBFF8A08D
+reads the current one; the boot process got it in `_INIT` at 0xBFFC6AC6 from
+a 0xB4 block) - probably the parent after its 5D wait, i.e. the child ran
+before the parent finished: check whether CreateProcess expects the child to
+stay unscheduled until a resume (vxd32 starts a thread at VWIN32 A, "ready").
+Then the console's VCOND services (38xxxx, the table below), on the host
+console, and xcopy's file calls through Int21Dispatch, to milestone 1.
+
+**Threads (the model).** Every guest thread is a host thread under native32's
+machine lock; `native32_wait()` (new, native32.c) blocks one inside a host
+answer: its registers kept, the lock released however deep, then both back.
+vxd32 keeps a ring-0 twin per thread (thread, process, TDBX, entry, esp, wake
+and parked events, the wait it is in) and switches VWIN32's "current" triple
+(0xBFFC9CE0/4/8 -> {thread, process, TDBX}) with the thread. A created thread
+(VWIN32 8) starts at its frame (0xBFF72170 pops ds es fs gs, popad, popfd;
+its `ret` lands in C, and the frame's next word, 0xBFF868EC, is entered as a
+jump). Blocking: 2D (Sleep), 5D (wait on wait blocks; woken by index), 1D/1E
+(critical-section contention, with the hand-over of ownership done by 1E).
+
+**KRNL386 and USER.** kernel32's 32->16 thunks all go through one slot
+(`call [0xBFF9AD46]`); the host points it at vxd32's KRNL386 stand-in, keyed
+by the stub's `mov cl, N`. USER32!UserSignalProc (0xBFFC95C0, called
+unchecked) is a vxd32 stand-in too. xcopy32 imports USER32: the host writes a
+proxy USER32.DLL into the sandbox, an export table only, each RVA wrapping to
+the host user32's function (no code, nothing of Microsoft's).
+
+**The sandbox.** Guest C:\ is work/root (`--root`); vxd32's `host_path` boxes
+every path (".." resolved, then the prefix checked). The host lays out
+WINDOWS, WINDOWS\SYSTEM (KERNEL32.DLL, the *.nls tables), WINDOWS\COMMAND
+(XCOPY32.MOD), WINDOWS\TEMP from work/sys. The guest's environment is a Win98
+one (PATH=C:\WINDOWS;C:\WINDOWS\COMMAND ...), never the host's. Registry calls
+(VMM 11-1B) go through regbox32.
+
+**Lessons.** (1) Argument counts: count the pushes back to the previous call
+and subtract what that call pops. VWIN32 4F looked like 2 args (`push eax;
+push 33h`) but the `push ebx; push ebx` before `call 0xBFF80E6E` (a `ret 4`)
+are its last two: 4 args. The 8-byte leak only showed as esi = 0 one function
+up. (2) `push L; ... ret` is a jump (generate.py, W9X), and the catalog may
+make L its own function. (3) An inline gate call pushes its own continuation
+(lift32: continue when the return address is the next instruction).
+(4) VWIN32's Win32 services are not in vwin32.vxd's DDB (its Win32 table
+pointer is 0): they live in VMM32.VXD, which is compressed. tools/le.py reads
+a VxD's objects with fixups applied, for when that is unpacked.
+
+| id | name (from use) | args | answer |
+|---|---|---|---|
+| 00010003/4 | VMM pager register (pd) / query (n, &pd) | 1/2 | host table; page-in run at commit |
+| 00010001 | PageCommit: a pager's page-in runs per page, pagerdata + i | 5 | eager |
+| 0001000A | PageFree (base, flags) | 2 | VirtualFree |
+| 0001000D | PageModifyPermissions (page, n, and, or) | 4 | 20060000h |
+| 00010010 | HeapFree (block, flags) | 2 | |
+| 00010011-1B | registry: open, create, close, delete key, enum key/value, query/set value | 3,3,1,2,4,8,6,6 | regbox32 |
+| 00010028 | (inline gate, process start) | 0 | 0 |
+| 002A0001 | ring-0 file entries (10 out pointers) -> the pager's read | 10 | tagged host entries (mutex, paging open/read/close) |
+| 002A0008 | new thread's twin (9 args, frame at a[7]) | 9 | r0 block |
+| 002A0009 | thread starting (-1) | 1 | 0 |
+| 002A000A | thread ready | 2 | host thread started |
+| 002A000C | first thread: {thread, process, TDBX} triple, NLS block (+44), PSP selector | 1 | see vxd32 |
+| 002A0010 | Int21Dispatch (eax, ecx; rest live) | 2 | host files, boxed; 0E 19 2A 2C 30 3E 3F 40 42 44(00,08,09) 57 59 EA 71(39 3A 3B 41 43 47 4E 4F 56 60 6C A0 A1) |
+| 002A001D/1E | crst wait / wake (hand-over) | 1/1 | |
+| 002A0020 | coprocessor (&type) | 1 | 3 |
+| 002A0021 | thread priority (r0, prio) -> offset | 2 | 10h |
+| 002A0026 | link thread twins | 2 | 0 |
+| 002A002D | block (ms, alertable) | 2 | C0h / 102h |
+| 002A0030 | destroy wait block (blk, 1) | 2 | 0 |
+| 002A0036 | run thread until it blocks | 1 | |
+| 002A005D | wait on wait blocks (n, objs, ms, all, alertable) | 5 | index / 102h / C0h |
+| 002A0060 | (wait block, on a new file object) | 1 | 0 |
+| 002A0064 | thread priorities (pairs, n) | 2 | 0 |
+| 0038001F | VCOND new console's ring-0 object | 0 | zeroed block |
+| 00380023 | VCOND init (6, &info, sysdir) | 3 | 0 |
+| KRNL386 0D/12/13/2A/2D/30/32 | GetDriveType, GetSystemDirectory, GetWindowsDirectory, WinExec (conagent only), GetWinFlags, task name, new task | | vxd32 |
+
+Not done (asked for): guest hard errors (none raised yet); Int21 3Ch/3Dh
+(plain create/open) and 4Eh/4Fh (8.3 find) are not answered, only the LFN
+71xx ones kernel32 has used so far.
+
+### Session 1's list (1 is done; 2 and 3 are open)
+
 
 1. **VWIN32 0C** (at 0xBFFC69D4, `_INIT`): the first thread. Its argument is
    a struct on the stack with kernel32 entries (0xBFF99B91, 0xBFFC7F00,
