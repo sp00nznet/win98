@@ -453,3 +453,21 @@ expect ds = DGROUP, which its thunk dispatchers set (USR seg 32:0048,
 3. Load the real user32/gdi32 with calc (lift.py calc + user32 + gdi32 +
    kernel32), connect the thunks, call a thunked export (GetKBCodePage
    51 of 0xBFF527B3). Then window creation, DISPLAY stand-in, first paint.
+
+### Session 4, handoff (after the coordinator's "continue")
+
+Done: step 1's seeds. `work/seeds/w16.json` (made from USER.EXE, not
+committed) seeds USER seg 32 with the 31 word offsets of the
+USRTHKCONNECTIONDATALS dispatcher table (+0Ah up to the dispatcher at
+0048) and the dispatcher itself: seg 83 now has 218 lifted functions (was
+40); check_w16 still passes. Recipe: read seg 32's words from +0Ah while
+the offset < 48h, write `{"USER": {"32": [...]}}`, pass `--seeds
+work/seeds/w16.json` to ne_link. Not done: MSG's table (seg 30:2D6E,
+layout unread: `f0 54 01 00 | 8c 2d 90 21 | bc 2d ...`) and the other
+connection tables (LSR, LSS, U, V, SLW, GDI's).
+
+Context ran heavy; the next session picks up at "Next (chunk 1, second
+half)" items 1 (ThunkConnect32 / kernel32 ordinal 90: what user32's
+`table` dword holds), 2 (KRNL386 boot data, then USER/GDI LibMain with
+16-bit int 21h/31h/2Fh onto vxd32) and 3 (a real user32 thunked export,
+then window creation).
