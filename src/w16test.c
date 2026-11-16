@@ -31,6 +31,14 @@ uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
 
 static uint8_t* g_img;
 
+/* Win16 identity gives segment n the fixed selector SEL(n): stamp them
+ * all before kernel32 boots, so the host allocator never hands one of
+ * them out (kernel32's boot thread got 00FF, segment 31's, as its TIB). */
+uint16_t w16_reserve_sels(void) {
+    for (int s = 1; s <= RECOMP_NUM_SEG; s++) native32_w9x_set_sel(SEL(s), 0, 0, 1);
+    return (uint16_t)(SEL(RECOMP_NUM_SEG + 1) & ~7);   /* the LDT alias, past them */
+}
+
 static int map_image(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "[w16] no %s\n", path); return 0; }
@@ -91,7 +99,10 @@ static uint32_t qt_thunk(uint32_t target, uint16_t ds16, int n, const uint16_t* 
 
 int w16_test(void) {
     if (!map_image(W16_IMAGE)) return 1;
+    const char* lm = getenv("W16_LIBMAIN");
+    int krnl_boot = lm && !_stricmp(lm, "KERNEL");   /* kernel32 not booted yet: KRNL386 boots it */
     uint16_t user_ds = SEL(RECOMP_MODULES[2].dgroup);
+    if (!krnl_boot) {
     /* USER.GETSYSTEMMETRICS (ordinal 179) = seg 4 of USER (global 55):0FDD */
     static const int sm[] = { 0, 1, 0x51, 0x52 };   /* 4 (SM_CYCAPTION) goes into KRNL386: needs its boot data */
     /* USER's LibMain has not run, so its metrics table (DGROUP:02D8, a word
@@ -109,10 +120,10 @@ int w16_test(void) {
     /* USER.GETDOUBLECLICKTIME (21) = global seg 54:9C10, no args */
     printf("USER.GetDoubleClickTime() = %u\n", qt_thunk((uint32_t)SEL(54) << 16 | 0x9C10, user_ds, 0, NULL) & 0xFFFF);
     fflush(stdout);
+    }
     /* W16_LIBMAIN=GDI|USER: run that module's own entry (LibEntry: ds =
      * hInstance = DGROUP, cx = heap size, es:si = command line) and stop at
      * the first thing it needs that is not there yet. */
-    const char* lm = getenv("W16_LIBMAIN");
     for (int m = 0; lm && m < 3; m++) {
         const RecompModule* rm = &RECOMP_MODULES[m];
         if (_stricmp(lm, rm->name)) continue;

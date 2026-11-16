@@ -781,3 +781,68 @@ module's unbound segment still sees the placeholder.
 b473aa3: lifted C identical (civnet's ne_link rc=1 is pre-existing).
 check_m1 and check_w16 pass. Not rebuilt with MinGW (C identical; cpu.h
 changes are identity-only macros).
+
+### Session 9: KRNL386 boots kernel32; real 16->32 thunks; SlowBoot reaches SYSTEM.DRV (handoff)
+
+pcrecomp w98 3ae8730; win98 (this commit). Run: `W16_LIBMAIN=KERNEL
+build/w16test.exe --mute` (W16_TRACE=1, W16_FN=1 for detail).
+
+**The faulting TIB was a selector collision, not a missing TIB.** kernel32's
+own _INIT TIB (Win9x layout) got selector 00FF from the host allocator, which
+is segment 31's identity selector: map_image then overwrote it. The host now
+stamps every SEL(n) before kernel32 boots (w16test.c `w16_reserve_sels`), and
+the LDT alias moves past them too (0030 was segment 6's 0037).
+
+**Faithful boot order.** With W16_LIBMAIN=KERNEL the host no longer calls
+kernel32's boot entry: KRNL386's BootStrap builds the 9Ch boot block itself
+(on its stack, seg001_6B2A..6EC3) and calls KEXP entry 3 (0xBFFC7AE4), as on
+Win98. Read off KRNL386:
+- the boot thread's TIB is KRNL386's own (seg001_7240: on its stack, a
+  descriptor over it, +0E an alias of ss, +04/+08 the stack); fs is shared
+  between the two sides now (identity.c w16_retf32);
+- block +14 (LDT base) comes from the LDT alias's own descriptor, which the
+  host LDT did not hold (vxd32 native32_w9x_ldt writes it);
+- 6582's `lss esp, [bp]` is m16:32 (lifter fix).
+kernel32's _INIT then runs to the end on KRNL386's block (MapSL of +3C,
+crsts, its service thread, registry, APPLOG) and returns 1.
+
+**16->32 thunks into kernel32 are the real ones.** KRNL386's seg 3 entries
+(+40C6, +4102, +4114, ...: `mov cx, n; jmp 41F6`) reach seg001_76BA, which
+writes a stub over seg 3 +41F6 at run time (B8 sel / 8E C0 / 66 0F B7 C9 /
+67 66 26 8B 91 tab / 66 EA 0xBFF71903) and retfs into it. Static code cannot
+hold it: identity.c `w16_retf` (emitted for every plain retf in identity
+mode) recognises the stub, takes edx = table[cx], runs kernel32's dispatcher
+0xBFF71903 as lifted code on the 16-bit stack and unwinds (setjmp) when the
+dispatcher's o16 retf comes back to the 16-bit caller. For that: every
+LIFT32_W9X function now pushes/pops through SS_BASE (the dispatcher pushes on
+the caller's 16-bit stack before its `mov ss`), lss/lds/... load the
+selector's base and take m16:16 for a 16-bit register, and identity far
+calls push the caller's SEG_n rather than the stale cpu->cs. Seen working:
+cx 78h, 50h, 84h, 00h, DCh (entries 0xBFF93F90, 93E95, 93FCF, 93BFD, 9427F).
+
+**kernel32 -> KRNL386 (32->16).** kernel32's own callback into KRNL386's
+entry 1:6582 (table at KEXP+4 / DGROUP:1AC7) now works on the real TIB.
+The vxd32 stand-in (`call [0xBFF9AD46]`) is still installed in both paths:
+in the KERNEL path it still answered thunks 12/13/30 (GetSystemDirectory,
+GetWindowsDirectory, task name) during _INIT, some with null buffers
+(it reads its args off the wrong frame there). Next: leave 0xBFF9AD46 as
+kernel32 has it when W16_LIBMAIN=KERNEL, so those thunks reach KRNL386's
+real exports (the stub patches itself into QT_Thunk).
+
+**Where it stands.** After kernel32's boot: VWIN32 0Ch (KRNL386's entry
+registration, answered eax 0), KRNL386 rereads its own file (int 21h now
+passes cx and value-dx), VDD absent, then SlowBoot asks to load SYSTEM.DRV,
+fails, and prints its fatal "SYSTEM.DRV" (int 10h mode 3 + int 21h). Task 2
+starts here: a SYSTEM.DRV stand-in KRNL386's LoadModule can load (an NE in
+work/root/WINDOWS/SYSTEM whose entries are host functions, from pcrecomp),
+then KEYBOARD, MOUSE, DISPLAY (DIB framebuffer on the private desktop),
+GDI.EXE and USER.EXE. Not reached: tasks 3 (calc) and 4.
+
+ponytail (this session):
+- VWIN32 0Ch: entries not kept, eax 0 (stored at [13BE]:36h by seg001_53FF).
+- VDD (0Ah) answered absent.
+- `lss sp` zero-extends esp (a B=0 stack ignores the top).
+- every W9X function addresses its stack through SS_BASE (one add per access).
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet relifted
+into scratch trees with b473aa3 and 3ae8730: lifted C identical.

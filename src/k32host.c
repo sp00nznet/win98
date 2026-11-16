@@ -250,8 +250,14 @@ static int host_main(int argc, char** argv) {
     for (int off = 4; off < 0x9C; off += 4)
         *(uint32_t*)(g_boot + off) = (uint32_t)(uintptr_t)VirtualAlloc(NULL, 0x1000, MEM_COMMIT, PAGE_READWRITE);
     *(uint32_t*)(g_boot + 0x00) = 0x9C;          /* the block's size: the boot checks it */
-    *(uint32_t*)(g_boot + 0x10) = 0x0030;        /* the LDT alias (kernel32 writes descriptors through it) */
-    { uint32_t ldt; native32_w9x_ldt(0x0030, &ldt); *(uint32_t*)(g_boot + 0x14) = ldt; }   /* +14: the LDT's flat address (MapSL reads it) */
+    uint16_t alias = 0x0030;
+#ifdef W16_IMAGE
+    /* before kernel32 takes its own (its TIB's fs); the alias goes past them
+     * too (0030 is segment 6's selector, 0037, in Win16 identity) */
+    { uint16_t w16_reserve_sels(void); alias = w16_reserve_sels(); }
+#endif
+    *(uint32_t*)(g_boot + 0x10) = alias;         /* the LDT alias (kernel32 writes descriptors through it) */
+    { uint32_t ldt; native32_w9x_ldt(alias, &ldt); *(uint32_t*)(g_boot + 0x14) = ldt; }   /* +14: the LDT's flat address (MapSL reads it) */
     *(uint32_t*)(g_boot + 0x18) = 0x0040;
     {   /* +20/+24: the Windows and system directories (flat strings), +28/+2A
          * their lengths (_INIT 0xBFFC6CA4 -> 0xBFFC9588/9584, 9590/958C) */
@@ -340,6 +346,12 @@ static int host_main(int argc, char** argv) {
     uint32_t bp = (uint32_t)(uintptr_t)g_boot;
     printf("%s + kernel32: %u lifted functions, booting kernel32 at 0x%08X\n", APP_EXE, recomp_dispatch_count, kexp[3]);
     fflush(stdout);
+#ifdef W16_IMAGE
+    /* W16_LIBMAIN=KERNEL: KRNL386's own BootStrap builds the boot block and
+     * calls this entry (KEXP 3, seg001_6E6x), as on Windows 98; the host's
+     * block above then only fed the stand-in path. */
+    { const char* lm = getenv("W16_LIBMAIN"); if (lm && !_stricmp(lm, "KERNEL")) { int w16_test(void); return w16_test(); } }
+#endif
     native32_call_guest(kexp[3], 1, &bp);
     recomp_trace_flush();
     fprintf(stderr, "[boot] kernel32 boot returned %08X; KRNL386 block +4 = %08X; Win16Mutex %08X (owner %08X), crst 9D10 owner %08X\n", g_eax, *(uint32_t*)(g_krnl_dbg + 4), MEM32(0xBFFC9470u), MEM32(MEM32(0xBFFC9470u) + 8), MEM32(MEM32(0xBFFC9D10u) + 8));

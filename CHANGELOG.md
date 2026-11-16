@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Milestone 2, session 9: with W16_LIBMAIN=KERNEL, KRNL386's own BootStrap
+  boots kernel32 (its own boot block and TIB), KRNL386's run-time generated
+  16->32 thunks run kernel32's real dispatcher, and SlowBoot reaches the
+  load of SYSTEM.DRV.
 - Stage 1 survey tool (tools/survey.py): VxDCall sites and service ids, flat-thunk stubs.
 - Stage 2: Windows 98 calc and notepad lifted on native32 (host DLLs).
 - Launcher and host set SetErrorMode so no loader box reaches the real desktop.
