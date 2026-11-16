@@ -1611,7 +1611,7 @@ both modes (above).
 
 ### Session 20: the MPR object is MPREXE's (MPREXE.EXE lifted and started in-process); stops in BroadcastSystemMessage (handoff)
 
-pcrecomp w98 (this session's commit); win98 this commit. Recatalog and relift
+pcrecomp w98 62d538b; win98 this commit. Recatalog and relift
 w16test (disasm32 changed; README command + mprexe.exe mprserv.dll mspwl32.dll)
 and xcopy.
 
@@ -1674,5 +1674,5 @@ ponytail (this session):
 - Held bases are listed by hand in k32host (`later[]`: mprexe.exe).
 
 **Regression.** check_m1 and check_w16 pass. johnny and civnet relift (ne_link,
-s20-* scratch trees, f1da364 vs this commit, normal and identity): see the
-commit; ne_link does not import disasm32.
+s20-* scratch trees, f1da364 vs 62d538b, normal and identity): identical C
+and mem_image.bin in all four (ne_link does not import disasm32).
