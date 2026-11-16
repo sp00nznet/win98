@@ -1182,8 +1182,8 @@ generically: ne_lift (identity) counts the words a straight run pushed
 before a retf (pushes and sp-neutral instructions back to the last call/
 pop/label); 4 or more means the retf's own target and a continuation are
 both on the stack: `w16_retf_call` runs the target with dispatch_far and,
-if its retf popped the continuation, runs that. 7 sites (KRNL386 seg2/3,
-USER seg 3/16/30, GDI). johnny and civnet relift (scratch, both trees)
+if its retf popped the continuation, runs that. 4 sites (KRNL386 seg2
+0D3A and seg3 2779, USER seg 3 twice). johnny and civnet relift (scratch, both trees)
 identical C and image.
 
 **Then, in order (all generic).**
@@ -1222,7 +1222,7 @@ wired), GetKBCodePage/calc (task 4).
 ponytail (this session):
 - w16_retf_call: 4+ pushed words means "target + continuation"; a run that
   pushes args and a target with no continuation would be misread (none
-  seen: the 7 sites all push cs:cont).
+  seen: the 4 sites all push cs:cont).
 - jump-table "unscaled" means no shl/sal/add idx,idx between the bound and
   the jmp; a scale by mov/lea is not seen.
 - lift32 67h: a bare 67h [disp16] (no register) is not narrowed.
