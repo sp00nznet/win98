@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Milestone 2, session 12: KRNL386's parameter-error returns unwind
+  correctly (pcrecomp w16_farcall/w16_jmpf); USER.EXE's LibEntry loads
+  DISPLAY.DRV, a host stand-in (800x600x16 framebuffer): Enable, Control,
+  ColorInfo, RealizeObject.
 - Milestone 2, sessions 10-11: KRNL386's SlowBoot loads every boot driver
   (host stand-ins SYSTEM, KEYBOARD, MOUSE, MMSOUND, COMM), GDI.EXE (whose
   LibEntry loads lifted GDI32.DLL through kernel32, and its raster fonts),

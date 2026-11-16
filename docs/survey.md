@@ -993,3 +993,73 @@ ponytail (this session):
 **Regression.** check_m1 and check_w16 pass (one check_m1 failure this
 session was a k32host loop bound I broke, fixed). johnny and civnet: see
 above.
+
+### Session 12: the sp drop was a non-local error return; USER loads DISPLAY.DRV (handoff)
+
+pcrecomp w98 6d51a20, 3962194; win98 499206b and this commit. Run:
+`W16_LIBMAIN=KERNEL build/w16test.exe --mute` (relink work/w16 first:
+ne_lift changed; README's ne_link line).
+
+**Root cause (task 1).** USER's LibEntry (seg67 31AE) calls
+GetModuleFileName(GetExePtr(x), ...) with x = 0. KRNL386's parameter
+validation (088D/08C1 -> seg1 9D47 -> HandleParamError) fails the handle
+and does what Win16 does: unwinds to the API's frame (`sub bp,2; mov sp,bp;
+pop bx; pop bp`), then `push ax; push bx; retf` into the API's error exit
+(2:00C4 for GetModuleFileName, 2:0093 for GetModuleName), whose `retf N`
+returns to the API's caller. Lifted, that retf (9D76, also 9D47's normal
+return) was a C return: the API body ran on after its validator call with
+the frame already popped -- bp became the pushed return offset (3211), and
+the sp of 079D followed. Generic fix:
+- ne_lift (identity): every direct far call is `w16_farcall(cpu, f)`, an
+  SEH frame keyed by the 16-bit sp at entry (the far return's slot);
+  host entries (w16_enter, w16_call) are frames too (an error return out of
+  QT_Thunk's GetSystemMetrics(82) lands there: it now answers 0).
+- a pushed retf, and a fall-through into a bare retf right after a push
+  (only 9D47 has that shape), is `w16_jmpf`: to a lifted function, run it
+  and `w16_unwind` (throw to the innermost far call frame the 16-bit sp has
+  passed); to a call site's middle (GDI's driver wrapper 5FB0 retfs to
+  5:2941), a return (unwind, else C return up tail calls).
+- gen_unresolved_stubs sees w16_farcall's prototypes.
+johnny and civnet relift (scratch, non-identity) byte-identical C and
+mem_image.bin.
+
+**Then.** Int21 AX=1C03 was not garbage: kernel32's profile code asks
+drive C's allocation (AH=1Ch, DL=3) -- vxd32 answers a fixed 2 GB FAT
+drive. int 2Fh 4A32h (USER seg72 3742, bl=5) no-op. USER's LibEntry
+LoadLibrarys SYSTEM.INI [boot] display.drv= (empty -> it wrote
+`*DisplayFallback=1` and failed): w16test now writes SYSTEM.INI [boot]
+naming the stand-ins each run.
+
+**DISPLAY.DRV (task 2), named from GDI's call sites** (all go through GDI
+seg5 5E6C/5E75/5E87/5EB4 -> 5FB0, its driver-call wrapper):
+- 5 Enable (seg5 26A4 style 1 into a 7Eh GDIINFO block, 289F style 0 for
+  the PDEVICE GDI GlobalAllocs): GDIINFO 3.10, 800x600x16, 208x156 mm,
+  96 dpi, no palette, LC_POLYLINE, PC_SCANLINE, CP_RECTANGLE, TC_RA_ABLE,
+  dpRaster 699h; PDEVICE a BITMAP header (bmType 2000h).
+- 3 Control (seg5 2AB6, QUERYESCSUPPORT 8): 0.
+- 2 ColorInfo (seg5 1B99): RGB <-> 5-6-5.
+- 10 RealizeObject (seg5 5263): pens/brushes realized, fonts left to GDI.
+Not reached: BitBlt 1, Disable 4, Output 8, Pixel 9, StrBlt 11,
+ExtTextOut 14, SetPalette 22, cursor 100-103; the framebuffer (g_fb in
+drv16.c) has no host window yet.
+
+**Where it stops.** Right after RealizeObject's size query for a brush
+(136 bytes): GDI 52B4 Local32Allocs it (KERNEL.209 -> kernel32 BFF94106 ->
+BFF744EC) and 52CD translates the handle through `ds:[ebx+10000h]` and
+the table at ds:[60h]; the read of `ds:[ebx+edx*2]` faults (addr
+E66315BC). Next: check what Local32Alloc returned (the handle form GDI
+expects for type 0, flags 1) and whether GDI's 32-bit DGROUP selector
+(ds) has its 32-bit limit/base; then continue DISPLAY (Output, BitBlt,
+StrBlt/ExtTextOut, cursor) and the host window on hiddenrun's desktop.
+Tasks 3-4 (16-bit registry via regbox32, GetKBCodePage, calc) not reached.
+
+ponytail (this session):
+- int 21h 1Ch: fixed 2 GB FAT drive C: (AL 64, CX 512, DX FFFFh), AL FFh otherwise.
+- int 2Fh 4A32h: no-op.
+- w16farcall covers direct far calls only (not dispatch_far's indirect ones
+  or `push cs; call near`); w16_jmpf's C-return case assumes tail calls.
+- DISPLAY: 800x600x16, no palette; Control answers 0 for every escape;
+  hatched/pattern brushes realized solid.
+- SYSTEM.INI rewritten each run with the stand-in driver names.
+
+**Regression.** check_m1 and check_w16 pass after each runtime change.
