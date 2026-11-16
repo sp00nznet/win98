@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dbghelp.h>
 
 #include "native32.h"
 extern const char* g_cur_import;
@@ -24,7 +25,7 @@ uint32_t native32_vwin32_r0_table(void);   /* vxd32.c */
 void native32_w9x_ldt(uint16_t alias_sel, uint32_t* ldt_base);
 uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
 extern uint16_t g_w9x_psp_sel;
-uint32_t native32_w9x_krnl386_thunk(void);
+uint32_t native32_w9x_krnl386_thunk(void), native32_w9x_user_signal_proc(void);
 
 #define K32_BASE 0xBFF70000u
 static native32_module_t g_mods[] = { { APP_EXE, APP_BASE }, { "kernel32.dll", K32_BASE } };
@@ -53,6 +54,14 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
             r->NumberParameters > 1 ? (unsigned long)r->ExceptionInformation[1] : 0ul, g_cur_func, g_cur_import);
     fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X ebp=%08X esi=%08X edi=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi);
+    {   /* the lifted C line: the register globals are stale for a body's locals */
+        IMAGEHLP_LINE64 ln = { sizeof ln };
+        DWORD disp = 0;
+        SymSetOptions(SYMOPT_LOAD_LINES);
+        if (SymInitialize(GetCurrentProcess(), NULL, TRUE) &&
+            SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)(uintptr_t)r->ExceptionAddress, &disp, &ln))
+            fprintf(stderr, "  at %s:%lu\n", ln.FileName, ln.LineNumber);
+    }
     native32_dump_icalls(12);
     fprintf(stderr, "  9CE0=%08X 9CE8=%08X 9D10=%08X 9CEC=%08X\n", MEM32(0xBFFC9CE0u), MEM32(0xBFFC9CE8u), MEM32(0xBFFC9D10u), MEM32(0xBFFC9CECu));
     recomp_trace_flush();
@@ -76,6 +85,81 @@ static DWORD WINAPI watchdog(LPVOID unused) {
 static uint8_t g_boot[0x200];
 static char g_tail[126];   /* the guest's command tail: what follows "--" */
 uint8_t* g_krnl_dbg;
+
+/* A host DLL the guest imports (xcopy32: USER32) is found by kernel32's own
+ * loader, so the sandbox gets a stand-in of the host's making: a PE with
+ * only an export table, each name's RVA pointing at the host's function of
+ * that name (base + RVA wraps to it), the same addresses native32_bind put
+ * in the IAT. `extra` adds names answered elsewhere (vxd32's stand-ins).
+ * No code, no entry point, nothing of Microsoft's. */
+static int write_proxy_dll(const char* path, const char* dll, uint32_t base, const char* const* names, int n,
+                           const char* const* xnames, const uint32_t* xva, int nx) {
+    enum { HDR = 0x200, SEC = 0x1000 };
+    static uint8_t img[HDR + 0x8000];
+    const char* all[512];
+    uint32_t va[512];
+    int m = 0;
+    HMODULE h = LoadLibraryA(dll);
+    for (int i = 0; i < n && m < 512; i++) { FARPROC f = h ? GetProcAddress(h, names[i]) : NULL; if (f) { all[m] = names[i]; va[m++] = (uint32_t)(uintptr_t)f; } }
+    for (int i = 0; i < nx && m < 512; i++) { all[m] = xnames[i]; va[m++] = xva[i]; }
+    for (int i = 1; i < m; i++)              /* the loader binary-searches the names */
+        for (int j = i; j > 0 && strcmp(all[j - 1], all[j]) > 0; j--) {
+            const char* t = all[j]; all[j] = all[j - 1]; all[j - 1] = t;
+            uint32_t v = va[j]; va[j] = va[j - 1]; va[j - 1] = v;
+        }
+    memset(img, 0, sizeof img);
+    uint8_t* e = img + HDR;                  /* the section: export directory, then tables, then strings */
+    uint32_t funcs = 40, nms = funcs + 4 * m, ords = nms + 4 * m, str = ords + 2 * m;
+    uint32_t p = str;
+    *(uint32_t*)(e + 12) = SEC + p; strcpy((char*)e + p, dll); p += (uint32_t)strlen(dll) + 1;
+    *(uint32_t*)(e + 16) = 1;
+    *(uint32_t*)(e + 20) = m; *(uint32_t*)(e + 24) = m;
+    *(uint32_t*)(e + 28) = SEC + funcs; *(uint32_t*)(e + 32) = SEC + nms; *(uint32_t*)(e + 36) = SEC + ords;
+    for (int i = 0; i < m; i++) {
+        *(uint32_t*)(e + funcs + 4 * i) = va[i] - base;
+        *(uint32_t*)(e + nms + 4 * i) = SEC + p;
+        *(uint16_t*)(e + ords + 2 * i) = (uint16_t)i;
+        strcpy((char*)e + p, all[i]); p += (uint32_t)strlen(all[i]) + 1;
+        if (p > 0x7F00) return 0;
+    }
+    uint32_t sz = (p + 0x1FF) & ~0x1FFu;
+    img[0] = 'M'; img[1] = 'Z'; *(uint32_t*)(img + 0x3C) = 0x40;
+    uint8_t* pe = img + 0x40;
+    memcpy(pe, "PE\0\0", 4);
+    *(uint16_t*)(pe + 4) = 0x14C; *(uint16_t*)(pe + 6) = 1; *(uint16_t*)(pe + 20) = 0xE0; *(uint16_t*)(pe + 22) = 0x2102;
+    uint8_t* o = pe + 24;
+    *(uint16_t*)(o + 0) = 0x10B; *(uint32_t*)(o + 28) = base;
+    *(uint32_t*)(o + 32) = 0x1000; *(uint32_t*)(o + 36) = 0x200;
+    *(uint16_t*)(o + 40) = 4; *(uint16_t*)(o + 48) = 4;             /* OS and subsystem 4.0 */
+    *(uint32_t*)(o + 56) = SEC + ((sz + 0xFFF) & ~0xFFFu); *(uint32_t*)(o + 60) = HDR;
+    *(uint16_t*)(o + 68) = 2;                                       /* GUI */
+    *(uint32_t*)(o + 72) = 0x100000; *(uint32_t*)(o + 76) = 0x1000; *(uint32_t*)(o + 80) = 0x100000; *(uint32_t*)(o + 84) = 0x1000;
+    *(uint32_t*)(o + 92) = 16;
+    *(uint32_t*)(o + 96) = SEC; *(uint32_t*)(o + 100) = p;          /* the export directory */
+    uint8_t* s = o + 0xE0;
+    memcpy(s, ".edata", 6);
+    *(uint32_t*)(s + 8) = p; *(uint32_t*)(s + 12) = SEC; *(uint32_t*)(s + 16) = sz; *(uint32_t*)(s + 20) = HDR;
+    *(uint32_t*)(s + 36) = 0x40000040;                              /* initialised data, readable */
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    fwrite(img, 1, HDR + sz, f);
+    fclose(f);
+    return m;
+}
+
+/* The names a module imports from one DLL, from its import table. */
+static int imports_from(uint32_t base, const char* dll, const char** out, int max) {
+    uint32_t pe = base + MEM32(base + 0x3C), imp = MEM32(pe + 0x80), n = 0;
+    if (!imp) return 0;
+    for (uint32_t d = base + imp; MEM32(d + 12); d += 20) {
+        if (_stricmp((const char*)(uintptr_t)(base + MEM32(d + 12)), dll)) continue;
+        for (uint32_t t = base + (MEM32(d) ? MEM32(d) : MEM32(d + 16)); MEM32(t) && (int)n < max; t += 4)
+            if (!(MEM32(t) & 0x80000000u)) out[n++] = (const char*)(uintptr_t)(base + MEM32(t) + 2);
+    }
+    return (int)n;
+}
+
+static char g_root_host[MAX_PATH];
 
 static int host_main(int argc, char** argv) {
     const char* sys = "work\\sys", *root = "work\\root";
@@ -101,6 +185,7 @@ static int host_main(int argc, char** argv) {
         char r[MAX_PATH], p[MAX_PATH], src[MAX_PATH];
         GetFullPathNameA(root, MAX_PATH, r, NULL);
         SetEnvironmentVariableA("NATIVE32_W9X_ROOT", r);
+        strcpy(g_root_host, r);
         for (int i = 0; i < 5; i++) { _snprintf(p, MAX_PATH, "%s%s", r, dirs[i]); p[MAX_PATH - 1] = 0; CreateDirectoryA(p, NULL); }
         _snprintf(src, MAX_PATH, "%s\\kernel32.dll", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\KERNEL32.DLL", r);
         CopyFileA(src, p, TRUE);
@@ -162,6 +247,8 @@ static int host_main(int argc, char** argv) {
      * (`call [0xBFF9AD46]` in the stubs' common tail, normally a stub that
      * patches itself into QT_Thunk): vxd32 answers them by thunk index. */
     *(uint32_t*)(uintptr_t)0xBFF9AD46u = native32_w9x_krnl386_thunk();
+    /* USER32!UserSignalProc, which kernel32 calls unchecked (vxd32) */
+    *(uint32_t*)(uintptr_t)0xBFFC95C0u = native32_w9x_user_signal_proc();
     /* VWIN32 stores its ring-0 entry table where the KEXP header's second dword points */
     *(uint32_t*)(uintptr_t)kexp[1] = native32_vwin32_r0_table();
     {   /* boot block +3C: KRNL386's half of the handshake, a 16:16 pointer to a
@@ -234,8 +321,46 @@ static int host_main(int argc, char** argv) {
     fflush(stdout);
     native32_call_guest(kexp[3], 1, &bp);
     recomp_trace_flush();
-    fprintf(stderr, "[boot] kernel32 boot returned %08X; KRNL386 block +4 = %08X\n", g_eax, *(uint32_t*)(g_krnl_dbg + 4));
-    return 0;
+    fprintf(stderr, "[boot] kernel32 boot returned %08X; KRNL386 block +4 = %08X; Win16Mutex %08X (owner %08X), crst 9D10 owner %08X\n", g_eax, *(uint32_t*)(g_krnl_dbg + 4), MEM32(0xBFFC9470u), MEM32(MEM32(0xBFFC9470u) + 8), MEM32(MEM32(0xBFFC9D10u) + 8));
+    {   /* Start the program the way Windows 98 does: kernel32's own
+         * CreateProcessA, from the boot thread, then wait for it. kernel32's
+         * loader maps the image over the copy native32 already holds (the
+         * same bytes, at the same base); its main thread runs on a host
+         * thread (vxd32). */
+        /* The boot comes back owning the Win16Mutex: on Windows 98 the boot
+         * thread goes on as KRNL386's task, which gives it up when it
+         * yields. The host is that task: let it go (_LeaveSysLevel,
+         * kernel32 ordinal 98, 0xBFF741ED), or every Win32 thread that
+         * takes it waits for ever. */
+        {   /* USER32: the host's, behind a proxy kernel32 can load */
+            const char* nm[256];
+            int n = imports_from(APP_BASE, "USER32.DLL", nm, 256);
+            static const char* const xn[] = { "UserSignalProc" };
+            uint32_t xv[] = { native32_w9x_user_signal_proc() };
+            char path[MAX_PATH];
+            _snprintf(path, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", g_root_host);
+            if (n && !write_proxy_dll(path, "user32.dll", 0x30000000u, nm, n, xn, xv, 1)) { fprintf(stderr, "no USER32 proxy\n"); return 1; }
+        }
+        uint32_t w16 = MEM32(0xBFFC9470u);
+        native32_call_guest(0xBFF741EDu, 1, &w16);
+        static char cmd[300];
+        static uint32_t si[0x44 / 4], pi[4], code;
+        uint32_t cpa = native32_export(K32_BASE, "CreateProcessA");
+        uint32_t wfso = native32_export(K32_BASE, "WaitForSingleObject");
+        uint32_t gecp = native32_export(K32_BASE, "GetExitCodeProcess");
+        _snprintf(cmd, sizeof cmd - 1, "C:\\WINDOWS\\COMMAND\\%s%s", APP_EXE, g_tail);
+        si[0] = 0x44;
+        uint32_t a[10] = { 0, (uint32_t)(uintptr_t)cmd, 0, 0, 1, 0, 0, 0, (uint32_t)(uintptr_t)si, (uint32_t)(uintptr_t)pi };
+        native32_call_guest(cpa, 10, a);
+        fprintf(stderr, "[boot] CreateProcessA(\"%s\") = %u, process %08X thread %08X\n", cmd, g_eax, pi[0], pi[1]);
+        if (!g_eax) return 1;
+        uint32_t w[2] = { pi[0], 0xFFFFFFFFu };
+        native32_call_guest(wfso, 2, w);
+        uint32_t c[2] = { pi[0], (uint32_t)(uintptr_t)&code };
+        native32_call_guest(gecp, 2, c);
+        fprintf(stderr, "[boot] %s exited with %u\n", APP_EXE, code);
+        return (int)code;
+    }
 }
 
 static int g_argc;
