@@ -61,7 +61,7 @@ def seeds(path):
 
 if __name__ == '__main__':
     root = sys.argv[1] if len(sys.argv) > 1 else 'work/sys'
-    res = dict(seeds(os.path.join(root, f)) for f in ('USER.EXE', 'GDI.EXE'))
+    res = dict(seeds(os.path.join(root, f)) for f in ('USER.EXE', 'GDI.EXE', 'shell.dll'))
     # KRNL386 call targets that ne_codemap's descent lost to data decoded as
     # code over them (seg 1 83EA runs through 852A, the int 21h handler it
     # calls as `pushf; push cs; call 852A`): seeds decode first and win.

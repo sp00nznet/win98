@@ -1455,3 +1455,87 @@ ponytail (this session):
 (Tried after the handoff: VWIN32 08 answering 1 takes an early boot path
 at once (KRNL386 asks int 21h 4300h, get attributes, before LibMain's
 drivers); reverted. If 1 is right, 4300h is the next service to write.)
+
+### Session 18: trampolined lifted jumps, CurTDB on a switch, MSGSRV32 runs and loads SHELL.DLL (handoff)
+
+pcrecomp w98 e19b797 (513bced, e19b797); win98 this commit. Rerun
+w16_seeds.py (now also shell.dll), copy work/sys/shell.dll to
+work/root/WINDOWS/SYSTEM/SHELL.DLL, and ne_link with `work/sys/shell.dll`
+appended to the module list.
+
+**Stack growth (task 1, generic, ne_lift identity mode only).** Every lifted
+function is a public wrapper `NAME(cpu) { recomp_tramp(cpu, NAME__b); }`
+around its body `NAME__b`. A jump into another lifted function (jmp, jcc,
+loop/jcxz, far jmp, fall-through) is `RECOMP_TAIL(f)` = `cpu->tail = f__b;
+return;`, and the wrapper's loop runs the next body. Every caller (lifted
+calls, dispatch, the runtime) still calls the wrapper, which drains the chain
+before it returns, so nothing else changed. segments.h declares the bodies;
+_unresolved_stubs.c gives a stubbed tail target a body too. Normal mode emits
+the same C as before: johnny and civnet relift identical C and mem_image.bin
+in normal mode (s18-* scratch trees); in identity mode they differ only by
+the wrapper/body/RECOMP_TAIL transform (checked by undoing it textually).
+KRNL386's scheduler loop now spins at a constant 16-bit sp instead of
+overflowing.
+
+**CurTDB (task 2).** KRNL386 hands the flat address of DGROUP:122C to the
+32-bit side in the boot block (+1Ch, seg1 6B8D..), and no 16-bit code sets it
+on a switch: on Win98 ring 0 does. Reschedule's switch (73BA: 13E4 = di =
+the next TDB, then VWIN32 01) is answered by setting 122C := di first; the
+thread that takes the CPU (MSGSRV32's, at 72D6 -> 5F57) finds its own TDB.
+VWIN32 08 stays 0 (1 was not needed).
+Then 5F7F loads the new task's ss:sp from its TDB and 5F8A retfs into the
+frame CreateTask built there (-> MSGSRV32 89:22EE). In identity mode a retf
+is a C return, which went back up into 687A. dispatch_far now remembers the
+far return its caller pushed; if the callee's last plain retf (w16_retf
+records its target) went somewhere else and that is a lifted function, it
+runs it ("retf to X, not the caller's Y" in W16_TRACE).
+
+**MSGSRV32's own code runs.** In order:
+- USER seg72 20E7: int 31h 0300 (real-mode int 2Fh 160Bh, identify TSRs):
+  nothing real-mode, block back as sent.
+- MSGSRV32 89:0E14 needs the SHELL VxD (17h) or exits 4C01: present; its PM
+  API dx 19h (register the event callback 89:0541; es = a flat data
+  selector, kept at [7Eh]), 1Bh/1Ch (event handled) no-ops.
+- kernel32 Int21Dispatch 60h (truename, 8.3) after LFN open misses.
+- MSGSRV32 LoadLibrary("SHELL.DLL"): Win98's 16-bit SHELL.DLL is now lifted
+  too (6th module, segs 91-103). It has 47 moveable internal references
+  (segment FFh = entry ordinal): ne_parse resolves them through the entry
+  table (they came out as SEG_255 and did not compile). johnny/civnet have
+  none (unchanged).
+- SHELL's LibEntry (91:0010) -> LibMain (92:0000) runs; it reads WIN.INI and
+  writes C:\WINDOWS\REG.DAT (inside work/root: SHELL's Win3.1 registry file,
+  because KRNL386's 16-bit registry (VMM 100h+) answers failure; see gaps).
+
+**Where it stops.** SHELL LibMain's epilogue (92:0135) pops a clobbered bp,
+so KRNL386's caller (seg2 3DAD/3DAF `leave; ret 0Ah`) returns on sp 0010
+and the module loader (seg2 163C..0E44) runs on a wrapped stack, ending in
+"near ret under a far call into 2:0437". Probe values: LibMain enters at
+11FF:7A8E bp 7A9A, frame bp 7A8C; at 0135 sp 7A7A bp 7A8C, but the word at
+ss:7A8C (the saved bp) is not 7A9B by then. Between them LibMain calls
+KERNEL _lclose (int 21h 3E through KRNL386's hook: 852A ret-jump, 866E,
+89DF `pop [bp+6]; pop [bp+0Ch]; pop ax; pop bp; dec bp; iret`). Suspect the
+ret-jump/iret path writing through the wrong bp (89DF's [bp+6]/[bp+0Ch]
+land in LibMain's frame). Next: log bp/sp at 852A entry, 89DF and 9DF0 for
+that 3E1A call, compare with a working _lclose (USER's at boot).
+
+Not reached: the shell (calc.exe is a Win32 PE: KRNL386 WinExec ->
+kernel32 CreateProcess, which needs a lifted calc in-process), calc's
+window and paint (task 3), input (task 4).
+
+ponytail (this session):
+- VWIN32 01: CurTDB := di (the TDB Reschedule picked), not the r0 thread's
+  own TDB.
+- dispatch_far's switch-in rule: only a plain retf records its target (retf
+  N does not), so the check also needs ret_ip to match; a target that is not
+  a lifted function start is taken as a C return after all.
+- int 31h 0300: only 2F/160B; any other real-mode int stops.
+- SHELL VxD 19h: the event callback is kept nowhere (no SHELL events:
+  appy time, VxD ShellExecute); 1Bh/1Ch do nothing.
+- int 21h 60h: path uppercased, no 8.3 short-name mapping.
+- REG.DAT: SHELL.DLL keeps a Win3.1 registry file in work/root/WINDOWS
+  because the 16-bit registry answers 3F3h; route VMM 100h+ to regbox32.
+
+**Regression.** check_m1 and check_w16 pass after each runtime change.
+johnny and civnet relift in s18-* scratch trees (2f6d052 vs 513bced, then vs
+e19b797): normal mode identical C and mem_image.bin; identity mode differs
+only by the trampoline transform, and e19b797 changes nothing for either.
