@@ -659,3 +659,64 @@ Regression: johnny and civnet relift and build in scratch trees (MinGW);
 civnet's lifted C is byte-identical to 380920f's, johnny has no addr32
 sites; check_m1 and check_w16 pass. ne_link exits 1 on civnet on main as
 well (pre-existing).
+
+### Session 7: BootStrap reloads itself and runs on in its own segments (handoff)
+
+pcrecomp w98 d176051; win98 c4097c7.
+
+**What session 6 misread.** The failure was not "000F missing from the
+selector table" but cs:[2] read through a segment LoadSegment had just
+overwritten. Two real causes:
+1. *DOS load high.* KRNL386's MZ header has e_minalloc = e_maxalloc = 0, which
+   DOS EXEC treats as "load high": the image goes at the **top** of the block
+   (PSP:2 = A000h) and the PSP stays at the bottom. w16test put the image at
+   PSP+10h, so GlobalInit's first arena (the image) covered all free memory,
+   the first GlobalAlloc moved it to extended memory, and BootStrap's 16-bit
+   paragraph deltas (B880 -> C37E's slide) wrapped. Now the load paragraph
+   is A000h minus the image size, and seg 1/4 are allocated low with no move.
+2. *Lifted cs is a constant.* LoadSegment(KERNEL, n) copies segment n from
+   cs into a fresh block; the lifted code kept reading cs:[n] through the old
+   selector. Done the faithful way (task 1, option a): in identity mode
+   `SEG_n` is `g_w16_segsel[n]` (gen_segments_h). On the first far call into
+   a selector the runtime does not know, identity.c `w16_rebind` reads
+   KRNL386's own data (selector table DGROUP:1234 -> arena -> owner = module
+   DB, its segment table +22 handles and resident name) and binds that
+   segment, plus the module's DGROUP, to KRNL386's selectors. Other segments
+   with a handle but no bytes yet (C597 allocates all four of KERNEL's at
+   once; the flags do not say "loaded") wait for their own first call. Code
+   segments 1-3 start on a private copy of the file bytes (w16test) so the
+   copy source survives the move; DGROUP stays where DOS put it.
+
+**Also fixed.** lar/lsl accept not-present descriptors (a discarded handle is
+read with lar before GlobalReAlloc reuses it; it was taking the "new handle"
+path) and return 32-bit rights/limits (lift16 temp was 16-bit). `0F FF`
+(ud0) / `0F 0B` (ud2) decode as `ud`; in identity mode they lift to
+`w16_raise(cpu, 6, cs, ip)`, which runs the guest's DPMI 0203 handler on a
+host stack with a 16-bit exception frame and continues at the frame's cs:ip
+(BootStrap's #UD probe at 1:B9BB -> handler B9BD -> B9E8). DPMI 0200-0205,
+0283 (KRNL386's form of 0203), int 2Fh 1684h bx=1 (VMM, optional: absent).
+Seeds 1:B711 (the retf into reloaded seg 1) and 1:B9E8.
+
+**Where it stands (task 2 done).** BootStrap: GlobalInit, module DB,
+LoadSegment 1 and 4, far jump 0347:B711 into lifted seg 1 (rebound), frees
+the DOS-loaded DGROUP, LoadSegment 2 and 3 from the sliding image, sets its
+exception handlers, the #UD probe, then int 31h 0002 for BIOS/video
+paragraphs (0, 40h, F000h, A000h, B000h, B800h, C000h, D000h, E000h) and
+then **spins**: watchdog at 50 s (`W16_LIBMAIN=KERNEL W16_TRACE=1`, last
+call int 31h 0002 bx=E000). Next: run with W16_FN=1 for a few seconds and
+find the loop (likely a ROM/BIOS-area scan through those selectors that
+expects real BIOS bytes, e.g. a ROM signature 55AA at C000:0 or the BIOS
+data area at 40:xx; give the real-mode megabyte plausible BIOS data area and
+empty ROM areas). Then SlowBoot: KRNL386 LoadModule of SYSTEM/KEYBOARD/
+MOUSE/DISPLAY/GDI/USER (task 3; drivers need stand-ins), then tasks 4-5.
+
+**Debug recipe used.** Temporary prints in the generated work/w16/src
+(restored from a copy afterwards) and a swappable `recomp_fn_hit` in
+identity.c to dump KRNL386's arenas (DGROUP:121E Burgermaster, 1232 table
+length, 1234 table; arena +8 base, +0C size, +10 handle, +12 owner) at chosen
+functions. Worth making a W16_ARENAS=fn option.
+
+**pcrecomp gaps.** A `push [mem]; push imm; retf` target and an exception
+frame's rewritten ip are not followed by the code map (seeded by hand). The
+rebind trigger is the first far call; data-only use of a not-yet-called
+segment of another module would still see the old selector.
