@@ -188,6 +188,10 @@ int w16_test(void) {
                 }
                 fclose(f);
             }
+            {   /* SYSTEM/KEYBOARD/MOUSE/DISPLAY.DRV for KRNL386's own LoadModule: host stand-ins (drv16.c) */
+                void w16_drv_write(const char *sysdir);
+                w16_drv_write("work/root/WINDOWS/SYSTEM");
+            }
             r.ax = 0x4B4F; r.es = 0x1000;
             /* what KRNL386's MZ stub (the load module's first bytes, entered by
              * DOS) hands BootStrap: ss = the load module's paragraph,

@@ -846,3 +846,70 @@ ponytail (this session):
 
 **Regression.** check_m1 and check_w16 pass. johnny and civnet relifted
 into scratch trees with b473aa3 and 3ae8730: lifted C identical.
+
+### Session 10: kernel32's own KRNL386 thunks; host drivers load through LoadModule (handoff)
+
+pcrecomp w98 (this session's commits); win98 (this commit). Run: `W16_LIBMAIN=KERNEL
+build/w16test.exe --mute` (W16_TRACE=1; W16_FN=2 prints ss:sp and bp per function).
+
+**Task 1 done: 32->16 thunks reach KRNL386's real exports.** In the KERNEL
+path k32host.c no longer writes 0xBFF9AD46. kernel32's slot points at a stub
+in its .data (0xBFFC9ED0) that rewrites itself on first call (patcher
+0xBFF7273F) into `xor ecx,ecx; mov cl,[ebp-4]; mov edx,[ecx*4+table];
+mov eax,0xBFF727D9; jmp eax` (table = the dword before the stub, filled at
+run time: 0001B418). Static code can't run rewritten bytes, so vxd32.c
+`qt_stub` is that stub (answers lookups of 0xBFFC9ED0) and enters lifted
+QT_Thunk. Seen: thunks 12h (seg 3:017F, GetSystemDirectory, copies DGROUP
+12BC), 13h (3:0155), 2Dh (3:0552), 30h (1:6411), 0Dh (1:7AD6, drive type:
+int 2Fh 150Bh MSCDEX check, answered "none").
+
+**Two runtime bugs it exposed (fixed):**
+- native32 saved only fs's *base* per thread, not the selectors or the other
+  Win9x bases: a nested mach_enter at depth 0 reloaded the host TIB's base
+  under fs=041F (QT_Thunk read fs:[0Eh] = 0 and ran on ss 0). regs_t now
+  carries g_seg_* and the es/cs/ds/ss/gs bases (the definitions moved from
+  vxd32.c to native32.c, so hosts without vxd32 link); a new thread starts
+  from the current selectors as before.
+- w16test ran KRNL386's BootStrap outside the machine lock: w16_call is now
+  inside mach_enter/mach_leave.
+- identity.c: g_w16, g_w16_ready, g_w16_ret and the 16->32 unwind stack are
+  per thread (kernel32's dispatcher leaves the Win16Mutex, so its service
+  thread can run 16-bit code meanwhile; seen: thunk 12 from fs 043F on ss
+  0457). segsel_init runs once per process.
+
+**Task 2 started: host drivers.** runtime/win16/identity/drv16.c writes
+SYSTEM/KEYBOARD/MOUSE/DISPLAY.DRV into work/root/WINDOWS/SYSTEM at start (our
+own NE: MZ stub, NE header, one code segment tagged "PCRD"+index, ordinals
+1-64 as fixed exported entries at +10h+2(n-1), each a `retf`; no Microsoft
+bytes). dispatch_far checks the tag before the lifted lookup and runs the
+entry's host function; LibEntry (+08) returns ax=1; an entry with no host
+function stops with driver and ordinal. KRNL386's own LoadModule loads
+SYSTEM.DRV (handle 045F, segment 0467 rebound) and calls its LibEntry.
+
+**Where it stands.** SlowBoot's driver loop (seg001_BDB8: di 26F0..26F8, a
+GetPrivateProfileString(system.ini [boot], key, default) + LoadModule per
+entry, seg001_BFC3) loads SYSTEM, then on the second entry (26F4) the
+GetPrivateProfileString epilogue (seg002_520D: pop ds; pop di; leave; retf
+16h) runs with bp = 0: the frame at 032F:1EA0 holds a saved bp of 0 (the
+loop's own bp is 0, BE01). sp becomes 000A, di 0004, and the loop runs 16K
+times (LoadModule returns 045F each time) before the fatal "SYSTEM.DRV". The
+first GetPrivateProfileString returns via seg001_A942, the second via
+seg002_5DCA (both through thunk DCh, entry 0xBFF9427F, kernel32 calls back
+into KRNL386 seg001_3B5C.. during it). Next: find which frame loses its bp
+between seg002_58EE/5954 and 520D in the second call (W16_FN=2), compare
+with the first; suspect the far-prolog `inc bp` frames (3B6B shows bp odd)
+or a callback's bp restore in w16_enter. No host driver entry has been
+called yet beyond LibEntry, so none are named.
+
+Not reached: KEYBOARD/MOUSE/DISPLAY entries, GDI/USER through LoadModule
+(task 3), calc (task 4).
+
+ponytail (this session):
+- qt_stub hardcodes Win98 SE kernel32's 0xBFFC9ECC/0xBFF727D9 (read them off
+  the patcher if another build turns up).
+- drv16.c exports ordinals 1-64 for every driver (no names yet).
+- int 2Fh 150Bh: no MSCDEX.
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet build from
+runtime/win16/host and the lifter, neither touched this session (identity/
+and native32 are not in their builds), so not relifted.
