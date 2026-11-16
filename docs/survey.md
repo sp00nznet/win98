@@ -1234,3 +1234,84 @@ ponytail (this session):
 **Regression.** check_m1 (xcopy relifted with the lift32 change) and
 check_w16 pass. johnny and civnet relift identical to ceb26ea's (C and
 mem_image.bin).
+
+### Session 15: SelectVisRgn's fault was an unpatched export prologue; Win98's desktop paints; KRNL386 asks for MSGSRV32 (handoff)
+
+pcrecomp w98 f08aa41; win98 this commit. Relink work/w16 (ne_lift and
+gen_segments_h changed; `NE_IDENTITY_SEL=1` on the ne_link line).
+
+**Root cause (task 1).** USER seg 6 81E8 calls GDI.105 SelectVisRgn (seg1
+137F), which starts `mov ax, ds; nop`. The NE loader patches that prologue
+of a library's exported shared-data entry (flags 3) to `mov ax, DGROUP`
+when it loads the segment (KRNL386 did: the bytes in memory were B8 4F 06),
+but the C was lifted from the file bytes, so GDI ran on USER's ds. 972D's
+`push dword ds:[422]` (GDI's Local32 heap) pushed 0 and the handle 0, and
+Local32Size (KRNL386 seg1 AFC8) read [0+0] -> E001FEA4. The hdc/hrgn were
+fine and GDI's own. Fixed in ne_lift: such entries (`8C D8 90` /
+`1E 58 90`) lift as `mov ax, SEG_dgroup` (28 in GDI). Identity mode only.
+
+**Then, in order (all generic).**
+- popsret by stack depth: GDI seg1 9658 `push edi ... pop esi; pop bx;
+  jmp 964E` drops its return and leaves through CombineRgn's epilogue.
+  ne_lift walks each function's paths (jumps followed, calls end a path)
+  counting pushes; a pop past them marks it (1140 -> 1336 checked sites).
+- pushed cs:continuation calls: KRNL386 seg1 CD6A `mov bx, CD7D; push cs;
+  push bx; ...; call far GetProcAddress; push dx; push ax; retf` calls
+  SYSTEM.7. Counted words after the pair, minus what each far call into
+  the module pops (its `retf n`), must be exactly the 2-word target:
+  w16_retf_call. A `push cs; push imm; call far` (a far pointer argument)
+  is popped by its call and is not one. 7 sites.
+- drv16 ret_far sets ret_ip (w16_retf_call compares it).
+- identity iret pops ip, cs, flags (lift16 iret_frame): KRNL386's int 21h
+  hook (seg1 8818) returned leaving 6 bytes, and C116's popa then loaded
+  ds from them.
+- w16_farcall: a callee that near-`ret`s with its far return still on the
+  stack jumped to a pushed address (852A's handler offset in a saved-bx
+  slot, 8624 `ret`): run it in the callee's segment (W16_SEGIN now records
+  g_w16_callseg) until the far return is popped.
+- int 21h AH=06 DL=FF from 16-bit code: no key, ZF set (KRNL386 seg1 80D9
+  drains the console at boot).
+- drv16: DISPLAY 4 Disable, 15 GetCharWidth; SYSTEM 1-6 (InquireSystem,
+  timers, GetSystemMSecCount), 7-9 (x87 save size 94, save/restore no-op);
+  KEYBOARD 1 Inquire, 2 Enable, 3 Disable, 7 SetSpeed, 132 GetKBCodePage
+  (437), 134/135 AnsiToOemBuff/OemToAnsiBuff, 136 EnableKBSysReq; MOUSE 1-3.
+
+**What runs.** USER's LibEntry completes; KRNL386 boots on: USER's desktop
+window fills the screen (DISPLAY.BitBlt 0,0 800x600 PATCOPY, the only
+screen blit so far): `out/w16desk15_20.png` (PrintWindow on hiddenrun's
+desktop, `W16_WINDOW=1 W16_HOLD=30`, shot at 20 s) is Win98's teal
+desktop, 0080 80h. Then KRNL386 seg1 BEC7 LoadModules its first program,
+`MSGSRV32.EXE` (DGROUP:2778), which work/root does not hold: error 2,
+"KERNEL" fatal message, USER disables the drivers (KEYBOARD.3 import stub,
+SYSTEM.5, DISPLAY.4) and KRNL386 calls VWIN32 0901 (ExitKernel), where the
+run stops (tagged VxD entry).
+
+Not reached: StrBlt, ScanLR, SetPalette (never called: dpText TC_RA_ABLE
+goes through ExtTextOut, RC_PALETTE off), EventCreate Set/Wait (not
+called yet), GetKBCodePage through user32 and calc (task 3).
+
+**Next.** MSGSRV32.EXE (Win98's, Win32): copy it into work/root\WINDOWS\
+SYSTEM like USER32 (k32host) and lift it into w16test (tools/lift.py
+w16test ... work/sys/msgsrv32.exe); kernel32's CreateProcess from
+KRNL386's LoadModule (thunk cx DCh, BFF9427F) then runs it, and it starts
+the shell (system.ini shell=Explorer.exe; for calc, shell=calc.exe in the
+guest's own system.ini). Answer VWIN32 0901 when it comes (exit).
+
+ponytail (this session):
+- Loader prologue patch: identity only. civnet's SMEDSNET/TIMERDLL have 2
+  such exports (host runtime): left as the file bytes until a civnet run
+  checks them.
+- _callee_args: the first retf on a straight decode from the callee names
+  its n; unknown callees (imports, near calls) reject the site.
+- popsret walk: `add/sub/mov sp`, pusha and calls end a path; 400 steps.
+- w16_farcall's near-ret continuation: direct far calls only (W16_SEGIN);
+  dispatch_far's indirect ones are not covered.
+- SYSTEM timers: CreateSystemTimer returns 1 and never calls back; x87
+  save/restore do nothing; InquireSystem: 1 ms timer, every drive fixed.
+- KEYBOARD/MOUSE Enable keep no event procs (no input events yet).
+- int 21h 06: no console input ever.
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet relift in
+scratch trees with 9786305 and f08aa41: identical C and mem_image.bin;
+identity mode (NE_IDENTITY_SEL=1) differs only by the intended lines (one
+iret in johnny, civnet's 2 DLL prologues, segments.h's g_w16_callseg).
