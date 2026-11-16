@@ -205,6 +205,20 @@ static int host_main(int argc, char** argv) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
             }
+            {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */
+                WIN32_FIND_DATAA fd;
+                HANDLE f;
+                _snprintf(p, MAX_PATH, "%s\\WINDOWS\\FONTS", r); CreateDirectoryA(p, NULL);
+                _snprintf(src, MAX_PATH, "%s\\*.fon", dir);
+                if ((f = FindFirstFileA(src, &fd)) != INVALID_HANDLE_VALUE) {
+                    do {
+                        _snprintf(src, MAX_PATH, "%s\\%s", dir, fd.cFileName);
+                        _snprintf(p, MAX_PATH, "%s\\WINDOWS\\FONTS\\%s", r, fd.cFileName);
+                        CopyFileA(src, p, TRUE);
+                    } while (FindNextFileA(f, &fd));
+                    FindClose(f);
+                }
+            }
         }
 #endif
         {   /* the NLS tables kernel32 maps at boot (unicode.nls, c_<cp>.nls, ...) */

@@ -50,4 +50,7 @@ if __name__ == '__main__':
     # ud0. 1:6582: KRNL386's 32->16 entry, which kernel32 reaches through
     # the table at KEXP+4 (DGROUP:1AC7, filled at run time).
     res['KERNEL'] = {'1': ['0x852a', '0xab30', '0xb9e8', '0x6582'], '3': ['0x3165', '0x3168']}
+    # GDI 11:2B73 `call cs:[si+2CADh]`: three near stubs (`jmp far` to imports)
+    # its init steps through, counted by the words at 2C96h (1, 6, 4, 0).
+    res['GDI'].setdefault('11', []).extend(['0x2c9e', '0x2ca3', '0x2ca8'])
     json.dump(res, sys.stdout)
