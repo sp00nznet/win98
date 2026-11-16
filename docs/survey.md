@@ -1451,3 +1451,7 @@ ponytail (this session):
 
 **Regression.** check_m1 and check_w16 pass. No lifter change this session
 (runtime and w16_seeds.py only), so no johnny/civnet relift.
+
+(Tried after the handoff: VWIN32 08 answering 1 takes an early boot path
+at once (KRNL386 asks int 21h 4300h, get attributes, before LibMain's
+drivers); reverted. If 1 is right, 4300h is the next service to write.)
