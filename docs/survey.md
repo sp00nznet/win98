@@ -913,3 +913,83 @@ ponytail (this session):
 **Regression.** check_m1 and check_w16 pass. johnny and civnet build from
 runtime/win16/host and the lifter, neither touched this session (identity/
 and native32 are not in their builds), so not relifted.
+
+### Session 11: the bp=0 fault was a lifter bug; GDI.EXE, DDEML and USER.EXE load (handoff)
+
+pcrecomp w98 37f1d99, 4313d0c, 733789d, 41326c2; win98 9d0ae82, 981d107,
+fb17e4e and this commit. Run: `W16_LIBMAIN=KERNEL build/w16test.exe --mute`
+(after the two lifts in README: ne_link now takes DDEML.DLL too, and
+w16test has its own lift, `tools/lift.py w16test` = xcopy32 + kernel32 +
+gdi32 + advapi32 + user32).
+
+**The bp=0 fault (task 1).** Not the `inc bp` frames: KRNL386's
+case-insensitive compare (seg1 AAF6) is `call AAE5`, and AAE5 is
+`pop dx; ...; jmp dx` -- it pops its own return address and jumps to it.
+ne_lift emitted the call as a C call followed by the fall-through, so the
+continuation (AAF9..AA0D, ending in `retf 8`) ran once inside AAE5 (via
+dispatch_near) and again after it returned, on a stack already unwound:
+sp ended 12h high, and the next push in SlowBoot's profile read (seg2 573E)
+overwrote the saved bp at 1EAC. The first profile read survived only
+because its `leave` happened to restore sp from an intact bp. Fix in
+ne_lift: a near call to a function whose first instruction pops a register
+that the function later `jmp`s through is a tail call. 33 sites in
+KRNL386/GDI/USER (KRNL 1:AAE5, USER 63:535A x30, 54:9BE0 x2).
+
+**Other lifter/runtime bugs found on the way (all generic):**
+- ne_lift: an exported entry hidden inside a skip instruction (KRNL386
+  3:3162 `mov cl,2` / 3164 `mov bx,01B1` covers AddAtom's 3165 `mov cl,1`,
+  and 3167 `mov bx,00B1` FindAtom's 3168 `mov cl,0`) -- the function before
+  fell into the hidden entry, so DeleteAtom and AddAtom both ran as
+  FindAtom. The function now decodes on along its own stream until it lands
+  on a function start. Only for exports/far-call targets and the 3-byte
+  `mov r16,imm16`/`cmp ax`/`test ax` idiom (padding before a prologue
+  straddles entries in civnet too). Also hit 1:AB2E.
+- ne_parse: a fixup past file_size into the alloc tail (GDI seg 43 ends in
+  `jmp far KERNEL.630` with its selector bytes beyond the file): the data is
+  padded so the instruction decodes.
+- lift32 (W9X): `mov sp, r16` drops esp's top when ss is 16-bit
+  (`recomp_ss_big`); kernel32's 16->32 return (0xBFF714AC `mov ss,dx;
+  mov sp,si`) returns to both kinds.
+- KRNL386's stack 032F is DPMI's boot ss: it is 16-bit (B=0) now
+  (w16test), as are DPMI 0000 descriptors.
+- identity w16_enter: kernel32's Call16 (0xBFF71414, gdi32's thunks) puts
+  an o32 flat return frame on the 16-bit stack: unwound like the big-stack
+  case.
+
+johnny and civnet relift (scratch trees) to byte-identical C and
+mem_image.bin with every lifter change above.
+
+**What runs now.** SlowBoot loads SYSTEM, KEYBOARD, MOUSE, MMSOUND, COMM
+(drv16 stand-ins), then GDI.EXE: its LibEntry LoadLibrary32s GDI32.DLL,
+which kernel32 maps itself from the guest's SYSTEM and runs as lifted
+code (DllMain, thunks both ways), loads vgasys/vgafix/vgaoem.fon from
+WINDOWS\FONTS (copied from work/sys), builds stock objects and connects
+GDI's thunks (KERNEL.630). Then DDEML.DLL and USER.EXE load and USER's
+LibEntry runs (VMM/VMD/ENABLE/REBOOT/SHELL asked for).
+
+**Driver entries named (task 2).** KEYBOARD.5 AnsiToOem / .6 OemToAnsi
+(KRNL386 1:A5C2, OpenFile's path conversion through DGROUP:1250).
+Nothing else has been called yet; DISPLAY.DRV is not loaded yet (USER
+loads it).
+
+**Where it stops.** In USER's LibEntry the 16-bit sp drops from 1DF6 to
+079D on ss 0347 (after a run of kernel32 thunks; look at the last stub
+returns before the drop), then a read of 0 bytes and kernel32's
+Int21Dispatch gets AX=1C03 (garbage). Next: W16_FN=2 around the drop;
+then USER's DISPLAY.DRV load (DIB framebuffer on hiddenrun's desktop),
+GetKBCodePage, calc (tasks 3-4 not reached).
+
+ponytail (this session):
+- KEYBOARD.5/.6: ANSI 1252 / OEM 437 fixed (Win98 SE US).
+- VTDAPI 0Ah: no-op (per-segment notify, result unread).
+- VMM present; 26Dh answers ax 0 (the no-VMM path); registry 100h-11Fh
+  answer 3F3h (ERROR_REGISTRY_IO_FAILED, what KRNL386 returns with no VMM)
+  -- route to regbox32 when a 16-bit caller needs a key.
+- VMD, ENABLE and any other VxD id: absent (logged under W16_TRACE).
+- MMSOUND/COMM stand-ins: LibEntry only.
+- only *.fon copied into WINDOWS\FONTS (no TrueType, no WIN.INI).
+- ne_lift hidden-entry decode skips _fpu_fixup.
+
+**Regression.** check_m1 and check_w16 pass (one check_m1 failure this
+session was a k32host loop bound I broke, fixed). johnny and civnet: see
+above.

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Milestone 2, sessions 10-11: KRNL386's SlowBoot loads every boot driver
+  (host stand-ins SYSTEM, KEYBOARD, MOUSE, MMSOUND, COMM), GDI.EXE (whose
+  LibEntry loads lifted GDI32.DLL through kernel32, and its raster fonts),
+  DDEML.DLL and USER.EXE through its own LoadModule; USER.EXE's LibEntry runs.
 - Milestone 2, session 9: with W16_LIBMAIN=KERNEL, KRNL386's own BootStrap
   boots kernel32 (its own boot block and TIB), KRNL386's run-time generated
   16->32 thunks run kernel32's real dispatcher, and SlowBoot reaches the
