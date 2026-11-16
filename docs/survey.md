@@ -550,3 +550,42 @@ iterations overflow it. Both before GlobalInit can work.
 **Not done this session**: steps 3 (calc on lifted user32/gdi32/kernel32,
 GetKBCodePage through user32's own ord-43/45 path) and 4 (window, DISPLAY
 stand-in, first paint).
+
+### Session 5, step 2b: where 0FBC3xxxxh comes from; lifter fixes (handoff)
+
+**Lifter fixes (pcrecomp w98 380920f).** (1) A 32-bit memory operand
+with a displacement (`[eax+8]`, KRNL386's arena walks) was wrapped to 16
+bits: `ADDR32((uint16_t)(eax + 8))`; now a 32-bit sum. (2) `xchg` used a
+16-bit temp for every width (`xchg dword es:[1310], eax` lost the high
+word). (3) addr32 movs/stos/lods (b/w/d) are lifted on esi/edi, and a rep
+on them counts ecx (GlobalInit's selector-table clear was UNHANDLED).
+(4) ne_lift: a backward branch to an earlier function (up to 256 bytes
+back) lifts the function from that target with a goto to its own entry,
+so the loop is a C loop, not a tail call per iteration (seg001_4E55 is
+now one loop over 4E52..4E5x). Still UNHANDLED in this tree: addr32
+scas/cmps (6), addr32 movsx (12). johnny (SCRANTIC.SCR) relifts and
+builds with MinGW on the new lifter (into a scratch tree, not johnny's
+work/). civnet not checked.
+
+**The size, found.** GlobalInit (seg001_C850, C8C3..C908) makes the
+first arena span from KRNL386's own code up to a real-mode paragraph:
+`movzx eax,dx; shl eax,4; and al,0E0h` (a paragraph -> linear), minus
+3554's answer (the linear base of KRNL386's own segment), and asks 4AFF
+for selectors over that size. On a real machine KRNL386 is DOS-loaded
+below 640 KB, so paragraph*16 is a linear address above it. Here
+KRNL386's segments are in the lifted image at ~04A0xxxxh and
+paragraph*16 is < 1 MB, so the size is negative (0FBxxxxxxh) and the
+tiling loop writes descriptors from 02E8h round the whole LDT
+(overwriting SEG_1's: the later fault reads cs:[6] through garbage).
+Moving the DPMI block top-down (done) did not change it: it is not the
+block.
+
+**Design decision for next session.** KRNL386 treats paragraph*16 as a
+linear address, so in identity mode real-mode memory must sit at host
+linear = paragraph*16. In a 32-bit Win11 process 0x10000-0xFFFFF can be
+VirtualAlloc'd at fixed addresses (only the first 64 KB is off-limits):
+put `g_rm` at host 0 + 64 KB (paragraphs 1000h+, PSP at 1000h is
+already there), and KRNL386's four segments inside it (ne_link/gen_image
+placing KERNEL's segments first and low, or a second image base for
+them). Then GlobalInit's conventional arena is right by construction.
+Then: GlobalInit on, GDI/USER LibMain, GetKBCodePage (task 3).
