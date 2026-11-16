@@ -35,3 +35,100 @@ calc (307 functions) and notepad (107) are lifted onto native32 against the host
 
 ## Next: milestone 1
 Rebase and lift kernel32 with a console tool that needs only kernel32. Answer the gate at 0xBFFC9734 in a new pcrecomp vwin32 shim, keyed by service ID: VMM memory to VirtualAlloc, VWIN32 to host objects, VCOND to the host console, Int21Dispatch to the dos32 runtime's table. Answer guest hard errors locally.
+
+## Milestone 1: progress and handoff
+
+`build/xcopy.exe` (src/k32host.c) maps xcopy32.mod and Windows 98's own
+kernel32 (lifted, at its fixed 0xBFF70000: kernel32 has no relocations, so it
+is not rebased) and boots kernel32 the way VWIN32 does. kernel32 now runs its
+own boot through the first process's creation; it stops at the first thread.
+
+    sh work/go.sh [--calltrace work/ct.txt]     # relift with tools/lift.py first
+
+`NATIVE32_VXD=1` traces every service. An unknown one stops the run (exit 5)
+with its id and arguments.
+
+### How kernel32 is booted (learnt from the code)
+
+- `_FREQASM` (image+0x1000) starts with a **KEXP header**: `'KEXP'`, a
+  pointer to the slot for VWIN32's ring-0 entry table (0xBFFC974A), 0xBFFC9CE0,
+  the **boot entry 0xBFFC7AE4**, 0, 0xBFF994BC. The boot entry takes one
+  argument, VWIN32's boot block. The real work is in `_INIT` (0xBFFC6000+).
+- **Boot block** (0x9C bytes; +0 must be 0x9C). The fields known so far:
+  +08 the PSP selector; +0C the VMM call gate (off16:sel16); +10 the LDT
+  alias selector; +14 the LDT's flat address (MapSL reads descriptors
+  there; low 3 bits 0); +18 a selector; +28/+2A words; +3C a 16:16 pointer to
+  the KRNL386 handshake block; +44/+54/+58 16:16 pointers; +50 the selector of
+  KRNL386's global arena (+54 -> the selector table's offset in it, +58 -> its
+  limit); +60 a byte flag; +78 a size in KB; +7A a selector read as gs:[0].
+  Everything else is a pointer to a VWIN32-side block, a zeroed page each.
+- **KRNL386 handshake block** (0x54 bytes, built by KRNL386 at run time): +0
+  0x54, +30 magic 0x35AA69, +34 = kernel32's dword at 0xBFFC9EC8; +10/+48/+4C
+  16:16 data; +14..+28, +3C..+44, +50 KRNL386 entry points (16:16; the host
+  tags them FEEE:<field> so a QT_Thunk down to one will name itself). kernel32
+  writes its own entries back into +04/+08/+0C/+38: that happening is how to
+  tell the handshake worked.
+- The PSP selector's PSP:2C is the environment ("VAR=val\0..\0", word 1,
+  program path) and PSP:80 the command tail. kernel32's own code copies them
+  into the first process.
+- The first process database (PDB): +1C the memory context (VMM 6), +24 the
+  PSP's linear address, +28 the PSP selector, +21 bit 2 = registered with
+  VWIN32 (4F/33h).
+
+### Services answered (pcrecomp runtime/native32/vxd32.c)
+
+| id | name (from use) | args | answer |
+|---|---|---|---|
+| 00010000 | VMM _PageReserve(page/PR_*, n, flags) | 3 | VirtualAlloc reserve |
+| 00010001 | VMM _PageCommit(page, n, hpd, pagerdata, flags) (also its own stub at 0xBFF713E2) | 5 | VirtualAlloc commit |
+| 00010002 | VMM _PageDecommit | 3 | VirtualFree decommit |
+| 00010005 | VMM _HeapAllocate(n, flags) | 2 | private host heap |
+| 00010006 | VMM context create (no args, result -> PDB+1C) | 0 | a cookie |
+| 0001000B | VMM context switch(ctx) | 1 | no-op |
+| 002A0003 | VWIN32 boot: kernel32's cs/ds | 8 | no-op |
+| 002A0006 | VWIN32 register kernel32 callbacks (block, 2 entries) | 3 | kept |
+| 002A0032 | VWIN32 release an object's ring-0 part | 1 | no-op |
+| 002A0047 | VWIN32 environment moved | 1 | no-op |
+| 002A004A | VWIN32 critical section's ring-0 half (crit, level) | 2 | a zeroed block |
+| 002A004F | VWIN32 object fn: 33h register, 34h drop | 2 | success |
+| ring-0 table +28 | allocate LDT selectors (ecx) -> ax | | host LDT counter |
+
+A wrong guess, kept as a warning: I took VMM 6-8 to be _HeapFree/
+_HeapReAllocate/_HeapGetSize (DDK order). Service 6 takes no arguments and
+creates a memory context, and the wrong answer sent the boot down its
+cleanup path quietly. Name a service from its call sites, never from the DDK
+order.
+
+### Toolkit pieces this needed (pcrecomp w98, `LIFT32_W9X=1`)
+
+- `call fword [m]` (the VMM gate) -> `recomp_farcall32()`; the gate returns to
+  VxDCall's caller and pops the service's arguments.
+- `66 CB` (o16 retf after `push cs; push ret; push target`) -> a far jump:
+  `recomp_retf32()` runs the host's ring-0 entries (tagged FEED:off), then
+  comes back to the pushed return. The return points are seeded
+  (`work/seeds/kernel32.dll.json`: the byte after each `xchg [esp],eax;
+  66 CB`).
+- A host-owned **LDT** (`g_ldt`): kernel32 writes descriptors itself through
+  the alias selector; `recomp_sel_base`, `lsl`, `lar` read them back.
+- **Segmented functions**: a function that loads ds/es (about 20 in
+  kernel32: the DOS-environment copy, the PSP) addresses implicit-ds operands
+  through DS_BASE and string ops through ES_BASE/DS_BASE. `mov es/ds/gs` ->
+  `recomp_set_seg`. Every other function stays flat.
+
+### Next
+
+1. **VWIN32 0C** (at 0xBFFC69D4, `_INIT`): the first thread. Its argument is
+   a struct on the stack with kernel32 entries (0xBFF99B91, 0xBFFC7F00,
+   0xBFFC9E1C); VWIN32 fills [ebp-68h] and the word at [ebp-58h]. This is
+   where the threading model starts: TDB/TIB (Win9x fs layout, fs:[1Ch]
+   flags, fs:[1Eh] checked by MapSL), the thread's ring-0 twin, then running
+   it. That is the next session's work. It needs native32's fs to point at a
+   Win9x TIB.
+2. The xcopy path after boot: GetStdHandle/WriteFile/FindFirstFile go
+   through VWIN32 Int21Dispatch (2A0010) and VCOND (38xxxx). Map them to
+   the host's console and file APIs (dos32's int 21h table is a model).
+3. Guest hard errors: kernel32 raises them through VWIN32 too. Answer them in
+   vxd32 (logged, never shown), as the coordinator asked.
+4. Side quest, not done: winmine/sol/freecell (Win16) on runtime/win16. It
+   is not cheap: each johnny-style title needs its own relift and a
+   `runtime/game.c`.
