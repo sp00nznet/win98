@@ -1676,3 +1676,84 @@ ponytail (this session):
 **Regression.** check_m1 and check_w16 pass. johnny and civnet relift (ne_link,
 s20-* scratch trees, f1da364 vs 62d538b, normal and identity): identical C
 and mem_image.bin in all four (ne_link does not import disasm32).
+
+### Session 21: thread exit runs to the end; the 16-bit registry is boxed; still in BroadcastSystemMessage (handoff)
+
+pcrecomp w98 785d6ed (49da1ca, 785d6ed); win98 this commit. Runtime only, so
+just rebuild w16test (no relift, no catalog change).
+
+**Root cause (task 1).** Not a w16_enter frame mismatch, and the 16-bit stack
+is not freed first. Both thunk-34 calls are FreeSelector calls from the
+thread object's teardown, 0xBFF89302 (VWIN32 0B's blk routine). The first one
+(0xBFF893E9) frees [thread+4C], which is the **thread's own fs** (its TIB
+selector: the first frame 0xBFF867B0 loads fs from it). QT_Thunk's tail then
+reloads fs from esi (0xBFF72881). That gives base 0 because KRNL386 seg1 4C18
+turns a freed descriptor into a free-chain link with access 0. The second call
+(0xBFF893FB, [thread+8C], the 16-bit stack) reads fs:[18h] from the IVT at
+linear 0 (F000FF53), so [TIB+7C] = ss 0 and esp is garbage.
+Fix (vxd32 recomp_set_seg): when a register is reloaded with the selector it
+already holds and that descriptor is no longer present, the cached base
+stays. ponytail: real x86 would #GP on that load, and I haven't read what
+Win98 does with the fault.
+
+**Second gap (task 1).** That teardown had never sent USER the thread-exit
+signal. kernel32's _INIT gives VWIN32 0C a callback block whose **+24 is
+0xBFF89912**: the ring-3 thread-termination routine. It decrements the process
+thread count, runs DLL_THREAD_DETACH (0xBFF89ECA), sends UserSignalProc 300h
+for a last thread and **20h (thread exit)** and 400h, and ends with
+**VWIN32 2C** (hands back the ebx it was entered with). VWIN32 never called
+it. run_termination (vxd32) now calls +24 and then blk+8, for both the
+calling thread and a queued kill (w9x_wait). VWIN32 2C is a no-op.
+ponytail: the order and "every termination" come from what each routine
+needs (89912 needs the live TIB); I haven't read VWIN32 for it.
+
+**Why the worker never pumps (task 1).** It isn't meant to. MPREXE's worker
+(0x5010C3) first calls USER32!RegisterSystemThread(2, 0). USER seg67 3098
+creates its queue and sets queue+14h bit 40h (a system thread: seg76 0AC4
+skips such queues). Then it loops on a 30 s semaphore wait and exits when
+idle. Now its exit sends signal 20h into USER (0A07:1E06 -> seg67 2134:
+queue walk, seg76 0156, unlock of the queue selector via int 31h 0005).
+
+**Where it stops.** MSGSRV32 (89:1601) calls BroadcastSystemMessage(0, NULL,
+WM_DEVICECHANGE 219h, 49h, 0), so no BSF_NOHANG. Inside SendMessage
+(seg54 9E2B -> 55 1DD4 -> 54 14A4 -> 54 160E) it does ResetEvent and then
+WaitForSingleObject(-1) on **0x064B3E28, the event the worker's queue was
+created with** (VMM HeapAllocate during the worker's RegisterSystemThread,
+right after MSGSRV32 freed an earlier object at the same address). The
+worker's exit signal does not set it, so the wait never ends. Next:
+- find which window or queue BSM picked (it should skip a queue with +14h
+  bit 40h, or never list a window owned by one). A top-level window whose
+  owner queue is the worker's would mean a "current queue" mix-up between
+  MPREXE's two threads (one Win16 TDB per process).
+- or check that USER's signal-20h path (seg67 2134..) is meant to wake
+  senders blocked on the dying queue, and see why it didn't here.
+
+**Task 2.** KRNL386's VMM 100h..10Eh registry now goes through regbox32
+(identity.c -> vxd32 native32_w9x_reg16). Each service's arguments were
+identified from its entry's retf: 100 Open, 101 Create, 102 Close,
+103 DeleteKey, 104 SetValue, 105 QueryValue, 106 EnumKey, 107 DeleteValue,
+108 EnumValue, 109 QueryValueEx, 10A SetValueEx, 10B Flush (0),
+10C/10D/10E Load/UnLoad/SaveKey (ERROR_ACCESS_DENIED). Win16's HKCR (1)
+maps to HKEY_CLASSES_ROOT. One boot makes about 200 calls (61 opens OK,
+3 SetValueEx, all boxed under HKCU\Software\pcrecomp\w98\xcopy).
+**REG.DAT is still written, and that is Win98's own behaviour:** SHELL.DLL's
+LibMain (seg92 0010..0124) does GetWindowsDirectory + LoadString D0h
+("REG.DAT"), and when _lopen fails it does _lcreat and writes its resource 64h
+(the 352-byte "SHCC3.10" empty database). It writes only C:\WINDOWS\REG.DAT
+in work/root. It doesn't depend on the registry: before this session the
+registry returned 3F3h and SHELL behaved the same.
+
+**Tasks 3-5 not reached** (calc, input, VWIN32 14: nothing has asked for it).
+
+Tools: W16_TRACE prints a 32->16 entry's first two argument words and the
+name for int 21h 3Ch/3Dh/5Bh/716Ch opens, plus `VMM nnnh registry -> rc`.
+
+ponytail (this session):
+- A same-selector reload of a non-present descriptor keeps the cached base
+  (vxd32 recomp_set_seg).
+- VWIN32 runs 0C's +24 and then blk+8 on every termination; 2C is a no-op.
+- The 16-bit registry's hive-file services are denied, and RegFlushKey is 0.
+
+**Regression.** check_m1 (/?, /S /I copy, /P) and check_w16 pass after each
+change. There were no lifter or disasm changes, so I didn't relift
+johnny/civnet.

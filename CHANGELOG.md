@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Milestone 2, session 21: a dying thread's teardown runs to the end (it frees
+  its own fs; the reload keeps the cached base) and VWIN32 now runs kernel32's
+  thread-termination routine (DLL detach, USER signal 20h) first; KRNL386's
+  16-bit registry goes through regbox32. Still stops in MSGSRV32's
+  BroadcastSystemMessage.
 - Milestone 2, session 19: SHELL.DLL's LibMain returns (ne_lift resolves
   __WINFLAGS; LibEntry took the InitTask path); MSGSRV32 calls WNetInitialize
   through USER's flat thunk into lifted MPR (second stub form, lea without a
