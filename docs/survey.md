@@ -1158,3 +1158,79 @@ ponytail (this session):
 
 **Regression.** check_m1 and check_w16 pass. johnny and civnet relift in
 scratch trees identical to 3962194's (C and mem_image.bin).
+
+### Session 14: USER.EXE's own LoadLibrary16 succeeds (MPR.DLL, four lifter/runtime fixes); handoff
+
+pcrecomp w98 9786305; win98 this commit. Relink work/w16 (ne_lift,
+ne_codemap changed) and relift w16test with mpr.dll (README).
+
+**Task 1: the module.** user32's thunk 38 (KRNL386 seg3 0668) asks
+LoadLibrary16 for `USER.EXE` itself. It is there; LoadModule calls each
+module's `DLLENTRYPOINT` (seg2 0BA5 looks the name up, 0D3A calls it), and
+USER's (seg 16 311C) is `ThunkConnect16("USER.EXE", "MPR.DLL", ...)`: the
+32-bit side is MPR.DLL, missing from work/root and from the lift. Now
+lifted into w16test (283 functions) and copied into work/root by k32host.
+kernel32's ThunkConnect16 helper (BFF73057) still failed the 'SL01' check:
+see lift32 below. After both, LoadLibrary16 returns 0A1E.
+
+**Task 2: the bp cause.** seg2 0D3A calls DllEntryPoint by
+`push cs; push 0D83; ...; push [bp-2]; push [bp-4]; mov ds, si; retf`.
+ne_lift took that retf for a C return (the push;retf far-jump rule needs the
+push right before), so the entry and the continuation at 0D83 never ran,
+0CCD's `leave` never ran, and its caller went on with bp = 193A. Fixed
+generically: ne_lift (identity) counts the words a straight run pushed
+before a retf (pushes and sp-neutral instructions back to the last call/
+pop/label); 4 or more means the retf's own target and a continuation are
+both on the stack: `w16_retf_call` runs the target with dispatch_far and,
+if its retf popped the continuation, runs that. 7 sites (KRNL386 seg2/3,
+USER seg 3/16/30, GDI). johnny and civnet relift (scratch, both trees)
+identical C and image.
+
+**Then, in order (all generic).**
+- lift32: a 16-bit base/index in 32-bit code (67h) is a 16-bit address:
+  `lgs bx, [ebp+10h]; mov eax, gs:[bx]` read with ebx's high word set
+  (ThunkConnect16 'SL01' check). Only kernel32's thunk-connect code
+  changed (78 lines).
+- identity w16_retf (16->32 stubs) and w16_retf32 restore g_ds_base/
+  g_es_base, not only the selectors (the QT_Thunk tail read
+  [0xBFFC9470] through a 16-bit ds base after a nested ThunkConnect).
+- vxd32: the flat thunk 32->16 stub is recognized by its bytes in any DLL
+  (`EB 1E`, then `call $+5; pop eax; sub eax, 25h; mov edx, imm`): user32's
+  at BFF5D400 (into USER.EXE) as well as kernel32's BFFC9ED0. Before, user32
+  ran it natively and lost eax through the VEH bridge.
+- identity w16_retf32: an o32 far call into flat code whose return is a
+  16:16 address (USER seg 21 A7A7: push cs:A7E9, __FLATCS:user32 BFF540DA,
+  which ends `66 CB`). The o16 retf reaches w16_enter, which longjmps back
+  (g_thk); the 16-bit code goes on at the return.
+- ne_codemap jump tables: `xchg ax, bx` (93h) names bx second, so USER seg 3
+  48F4's bound was missed and the table ran over the code at 498A
+  (unlifted target 3:498A); a bound on an index that is never scaled is in
+  bytes (USER seg 4 4789: `shr ax, 3; cmp ax, 32h; xchg bx, ax`).
+
+**Where it stops.** USER's LibEntry runs on through its MPR thunks and
+user32 (DISPLAY ExtTextOut "2","1","0" and BitBlts, still into GDI memory
+bitmaps), then USER seg 6 (lifted 57) 81E8 calls GDI SelectVisRgn (GDI.105,
+seg1 137F) -> 63B9 -> 13AA -> 972D -> KRNL386 seg1 AFC8 (a Local32 lookup):
+`mov eax, ds:[edi+esi]` with ds = [13A6] faults at E001FEA4. Check the hdc/
+hrgn SelectVisRgn gets (and whether USER made that region through GDI or
+got it from user32), then the Local32 handle it maps.
+
+Not reached: the desktop paint into the DISPLAY framebuffer (task 3; StrBlt,
+ScanLR, SetPalette, Disable not yet called; EventCreate Set/Wait not
+wired), GetKBCodePage/calc (task 4).
+
+ponytail (this session):
+- w16_retf_call: 4+ pushed words means "target + continuation"; a run that
+  pushes args and a target with no continuation would be misread (none
+  seen: the 7 sites all push cs:cont).
+- jump-table "unscaled" means no shl/sal/add idx,idx between the bound and
+  the jmp; a scale by mov/lea is not seen.
+- lift32 67h: a bare 67h [disp16] (no register) is not narrowed.
+- qt_stub keeps the stub's address in a thread-local set by the lookup just
+  before the call; the 0xBFF727D9 target is Win98 SE kernel32's.
+- w16_retf32's 16:16 return path: the flat callee must end in a retf that
+  reaches w16_enter with exactly that address.
+
+**Regression.** check_m1 (xcopy relifted with the lift32 change) and
+check_w16 pass. johnny and civnet relift identical to ceb26ea's (C and
+mem_image.bin).

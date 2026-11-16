@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Milestone 2, session 14: user32's LoadLibrary16("USER.EXE") succeeds
+  (USER's DllEntryPoint ThunkConnect16s to MPR.DLL, now lifted into
+  w16test; pcrecomp: retf-into-pushed-far-call, 67h [bx] in 32-bit code,
+  any DLL's flat-thunk stub, o16-retf returns from flat code); USER.EXE's
+  LibEntry runs on into the first window paint (DISPLAY ExtTextOut/BitBlt)
+  and stops in GDI SelectVisRgn's Local32 lookup.
 - Milestone 2, session 13: GDI's Local32 heap works (pcrecomp lift16: a
   67h [disp32] past 64K stays 32-bit); DISPLAY.DRV stand-in gains BitBlt,
   Output, Pixel, ExtTextOut, DeviceBitmapBits and the cursor entries, and
