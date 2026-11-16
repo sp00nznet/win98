@@ -298,3 +298,158 @@ w9x_wait waits for its next one; FreeSelector does not reuse selectors.
 4. Side quest, not done: winmine/sol/freecell (Win16) on runtime/win16. It
    is not cheap: each johnny-style title needs its own relift and a
    `runtime/game.c`.
+
+## Milestone 2 design: lifted 32-bit and lifted 16-bit in one process
+
+Goal: calc (or notepad) on Win98's own lifted user32 + gdi32 + kernel32,
+with USER.EXE, GDI.EXE and KRNL386.EXE lifted through recomp16 and the
+flat thunks bridged. Written before building (session 4).
+
+### Why identity
+
+user32 reads USER.EXE's data segment through flat pointers (GetSystemMetrics,
+IsWindow), and QT_Thunk's 16-bit stack is an *alias* of the 32-bit one
+(0xBFF72819: `sp = esp - base`, ss = the thread's stack selector from
+TIB+7C, base -TIB+78). So a 16-bit address sel:off and a flat address must
+name the same byte. pcrecomp's Win16 runtime computes every access as
+`cpu->mem[cpu->sel_base[sel] + off]` (runtime/win16/cpu.h `seg_off`), so:
+
+- **Base 0.** `cpu->mem = 0` in a 32-bit host: `mem[addr]` is the byte at
+  flat `addr`. No copy, no second address space. (`RECOMP_W16_IDENTITY`.)
+- **One descriptor table.** `seg_off` asks native32's LDT (`g_ldt`, the
+  one kernel32 already writes through its alias selector and reads in
+  MapSL/MapLS) for the selector's base instead of `cpu->sel_base[]`, so a
+  selector kernel32 allocates is valid in 16-bit code at once and a 16-bit
+  segment is valid in MapSL. lar/lsl read the same descriptors.
+- **Real selectors.** ne_link numbers every segment of every module
+  globally (SEG_1..SEG_N); in identity mode SEG_n is the selector
+  `(n << 3) | 7` (LDT index n), and gen_image writes that value into
+  relocated selector fields. The host places each segment at a flat
+  address (VirtualAlloc, 64 KB each) and writes descriptor n for it before
+  kernel32 boots; vxd32's LDT allocator starts above N.
+- **Lifted 16-bit registers.** The Win16 runtime's `CPU` keeps its own
+  register file. The bridge copies native32's g_eax..g_edi and the segment
+  registers in and out at each crossing; nothing else is shared.
+
+### The crossings
+
+1. **32 -> 16 (QT_Thunk).** A user32/gdi32 thunk pushes word args and calls
+   QT_Thunk with edx = the 16:16 target from `table[cl]`. QT_Thunk takes
+   the Win16Mutex, switches ss:esp to the 16-bit alias, pushes the return
+   `[0xBFFC979C]` (a 16:16 stub) and does `retf` to the target. The lifted
+   `retf` (recomp_retf32, W9X) sees a 16-bit code selector: the bridge
+   loads `CPU` (ss:sp from ss/esp, ds/es, ax..di), calls the lifted
+   16-bit function from recomp16's dispatch table (sel:off), and when it
+   returns (its `retf N` popped the return and the args) continues at the
+   32-bit code that stub would jump to (0xBFF7286D: back to the 32-bit
+   stack, release the mutex) with dx:ax as the result.
+2. **Connection tables.** The dword before each patched stub (user32
+   0xBFF512D6 / 0xBFF527B3, gdi32's) is filled by ThunkConnect32 with a
+   flat pointer to the 16-bit module's `THKCONNECTIONDATALS` array of
+   16:16 targets. Chunk 1 fills it from the host (the export's flat
+   address, identity) instead of running ThunkConnect32/16; the real
+   handshake comes when LoadLibrary16 does.
+3. **16 -> 32** (USER calling user32 callbacks, window procs): later,
+   through the `*SL` tables (QT_Thunk's mirror, FT_Thunk / the 16-bit
+   `call far` into a 32-bit selector); the lifted 16-bit far call to a
+   32-bit selector ends in native32's dispatch.
+4. **16-bit system calls.** KRNL386's int 21h/2Fh/31h and USER/GDI's
+   int 2Fh AX=1684h (VxD entry points) go to vxd32's existing tables:
+   int 21h -> the Int21Dispatch handler, int 31h (DPMI) -> the LDT
+   (allocate/set base/limit), 1684h -> tagged entries per VxD.
+5. **DISPLAY.DRV.** GDI.EXE calls the driver through far pointers it
+   reads from the driver's entry table (199 sites). A host module with
+   DISPLAY's exports (Enable, BitBlt, Output, StrBlt, RealizeObject,
+   ColorInfo, Control, ...) answers them on a 32 bpp DIB the host owns;
+   the DIB is blitted to a host window on hiddenrun's private desktop and
+   screenshot with PrintWindow.
+
+### Who loads the 16-bit modules
+
+On Win98 KRNL386 boots first (from WIN.COM/VMM), builds the global heap
+and loads USER/GDI with its own NE loader. Lifted code, though, has its
+segments at fixed places (gen_image). So the host does what VMM does for
+kernel32: it maps the lifted image, writes the descriptors, and fills the
+few KRNL386 structures the 32-bit side reads (the handshake block, the
+global arena kernel32's boot block points at, module database entries for
+USER/GDI so GetModuleHandle16 finds them), then runs USER's and GDI's own
+LibMain. KRNL386's own boot code is not run in chunk 1.
+
+### Chunks
+
+1. A thunked user32 export that does not draw (GetKBCodePage, index 51 of
+   0xBFF527B3, or GetMenuCheckMarkDimensions, 98 of 0xBFF512D6) returns
+   USER.EXE's own answer through QT_Thunk and lifted 16-bit code.
+2. Window creation (CreateWindowEx through USER's own window manager).
+3. First paint through GDI.EXE and the DISPLAY stand-in; PrintWindow
+   shot compared with stage 2's native32 calc (tools/gdicmp.py).
+
+### Session 4 (pcrecomp w98 d89c3d8, faefa53): console input; milestone 2 chunk 1, first half
+
+**Console input.** VCOND F (h) is the input mode (7: processed, line,
+echo); VCOND 10 (h, buf, n, 1) reads one byte (kernel32 does the line
+editing and echo, 0xBFFA5C5E). Both on the host's stdin; LF and CRLF are
+Enter, EOF gives CR then ^Z. ReadFile on a console handle first waits on
+the console object itself (VWIN32 5D with VCOND 2's object): vxd32 treats
+that as ready. `xcopy /P` with `y n y` on stdin copies A.TXT and
+SUB\C.TXT, not B.BIN (tools/check_m1.sh). Each answer prompts twice more,
+for the CR and LF kernel32's line mode hands xcopy after the letter:
+xcopy reads one byte at a time and re-asks on anything but Y/N. Whether
+real Win98 does the same in a DOS box is unchecked. Win98's xcopy32 has
+no overwrite prompt (no /-Y): it overwrites.
+
+**Identity mode, built.** As designed above:
+- `cpu.h` `RECOMP_W16_IDENTITY`: `seg_off`/lar/lsl read native32's LDT
+  (`recomp_sel_base`, `recomp_lar32/lsl32`), `cpu->mem` is 0.
+- `ne_link` with `NE_IDENTITY_SEL=1`: SEG_n = (n << 3) | 7 in segments.h
+  and in every relocated selector of the image (gen_image `sel_value`).
+  KRNL386 + GDI + USER: 85 segments (KERNEL 1-4, GDI 5-51, USER 52-85),
+  6000 code-map functions, 18 unresolved stubs, 65 imports of the five
+  modules not lifted (COMM, DDEML, KEYBOARD, MOUSE, SYSTEM) as stubs.
+  The whole tree builds with MSVC x86 (`w16.lib`, CMake target w16).
+- `runtime/win16/identity.c`: dispatch (far: selector >> 3), the trace
+  ring, fatal stops, and `w16_enter` (the 32 -> 16 bridge).
+- vxd32: `native32_w9x_set_sel` (fixed descriptors, allocator moves past);
+  `recomp_retf32` hands an o16 retf into an LDT code selector to
+  `native32_w16_enter`; `recomp_set_seg(2)` tracks ss (`g_ss_base`).
+- lift32 (W9X): a function that loads ss addresses esp/ebp operands and
+  the retf's target through `SS_BASE` (QT_Thunk runs on the 16-bit alias
+  between `mov ss, edx` and `mov ss, edi`; the read of [ebp-20h] in its
+  tail is ss-relative). generate.py sets it too (it builds Lifter state
+  itself, so a flag set only in lift_function never reached kernel32).
+
+**Chunk 1, first half: runs.** `sh tools/check_w16.sh`: after kernel32's
+boot, build/w16test.exe calls kernel32's own lifted QT_Thunk
+(0xBFF727D9) with edx = USER.GETSYSTEMMETRICS (global seg 55:0FDD), a
+user32-style frame and the index pushed as a word. QT_Thunk takes the
+Win16Mutex, switches to the 16-bit stack (the task-thread path,
+0xBFF728BA: ss = TIB+0E), retf's into lifted USER.EXE, which reads its
+metrics table (DGROUP:02D8) and `retf 2`s to the return stub; kernel32's
+tail rebuilds the flat stack and returns. Five calls in a row. USER's
+LibMain has not run, so the table is zeros: the test plants 640/480 in
+SM_CXSCREEN/SM_CYSCREEN from the 32-bit side and gets them back.
+
+Learnt: (1) QT_Thunk has two paths: a Win32 thread (TIB+1C bit 0) uses
+TIB+78/7C and returns through [0xBFFC979C]; the KRNL386 task's thread
+(the boot thread) uses TIB+0E and [0xBFFC97A4]. Both returns come from
+KRNL386's handshake block (+1C, +24): 16-bit stubs that jump far into
+kernel32 (0xBFF7286D, 0xBFF72913). The host builds them (66 EA off32
+sel16) since KRNL386's boot does not run. (2) The host sets TIB+0E to a
+selector over the boot thread's stack (ponytail: one, 48 KB below; the
+TIB+78 path builds its own). (3) A thunk target's DS: USER's exports
+expect ds = DGROUP, which its thunk dispatchers set (USR seg 32:0048,
+`mov ax, DGROUP; mov ds, ax; jmp cs:[di+0Ah]`); the test sets it.
+
+**Next (chunk 1, second half).**
+1. USER's thunk targets are not in the code map: the dispatcher's
+   `jmp cs:[di+0Ah]` table (USRTHKCONNECTIONDATALS +0Ah: word offsets
+   0078, 00C5, ...; MSG's at seg 30:2D6E) has to seed ne_link
+   (`--seeds`). Read kernel32 ordinal 90 / ThunkConnect32 to learn what
+   the 32-bit `table` dword holds (16:16 per index, built from these).
+2. KRNL386's boot data: SM_CYCAPTION (4) already goes into KRNL386
+   (seg001_5B32: `es = cs:[4]`, a flat selector filled at boot, then
+   VMM's dword at 0x1008). Then USER's and GDI's LibMain (RECOMP_MODULES
+   cs:ip), with the 16-bit int 21h/31h/2Fh answered from vxd32.
+3. Load the real user32/gdi32 with calc (lift.py calc + user32 + gdi32 +
+   kernel32), connect the thunks, call a thunked export (GetKBCodePage
+   51 of 0xBFF527B3). Then window creation, DISPLAY stand-in, first paint.

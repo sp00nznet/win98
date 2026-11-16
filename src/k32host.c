@@ -348,6 +348,9 @@ static int host_main(int argc, char** argv) {
             _snprintf(path, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", g_root_host);
             if (n && !write_proxy_dll(path, "user32.dll", 0x30000000u, nm, n, xn, xv, 2)) { fprintf(stderr, "no USER32 proxy\n"); return 1; }
         }
+#ifdef W16_IMAGE
+        { int w16_test(void); return w16_test(); }   /* milestone 2, chunk 1 (src/w16test.c) */
+#endif
         uint32_t w16 = MEM32(0xBFFC9470u);
         native32_call_guest(0xBFF741EDu, 1, &w16);
         static char cmd[300];

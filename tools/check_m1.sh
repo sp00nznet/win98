@@ -26,3 +26,7 @@ rm -rf $R && mkdir -p $R/SRC/SUB && printf 'hello win98\r\n' > $R/SRC/A.TXT &&
   head -c 70000 /dev/urandom > $R/SRC/B.BIN && printf 'nested\r\n' > $R/SRC/SUB/C.TXT
 sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I | grep "copied"
 diff -r $R/SRC $R/DST && echo "copy identical"
+# /P on scripted stdin: y, n, y copies A.TXT and SUB\C.TXT only
+rm -rf $R/DST
+printf 'y\r\nn\r\ny\r\n' | sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I /P | grep "copied"
+[ -f $R/DST/A.TXT ] && [ ! -f $R/DST/B.BIN ] && [ -f $R/DST/SUB/C.TXT ] && echo "/P answers honoured"

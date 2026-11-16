@@ -21,3 +21,12 @@
   71A7h. Guest hard errors (MessageBoxA) are answered in vxd32 and logged.
   tools/check_m1.sh checks both; run_xcopy.sh keeps `/S` from MSYS path
   conversion.
+- Console input (session 4): VCOND F/10 on stdin; `xcopy32 /P` takes
+  scripted answers (tools/check_m1.sh checks y/n/y).
+- Milestone 2 design in docs/survey.md: Win16 identity mode (16-bit
+  selectors in native32's LDT, cpu->mem 0), the crossings, who loads the
+  16-bit modules.
+- Milestone 2, chunk 1, first half: KRNL386 + GDI + USER lifted by ne_link
+  in identity mode (CMake target w16); build/w16test.exe calls lifted
+  kernel32's QT_Thunk into lifted USER.EXE's GetSystemMetrics and back
+  (tools/check_w16.sh).
