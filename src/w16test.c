@@ -109,5 +109,35 @@ int w16_test(void) {
     /* USER.GETDOUBLECLICKTIME (21) = global seg 54:9C10, no args */
     printf("USER.GetDoubleClickTime() = %u\n", qt_thunk((uint32_t)SEL(54) << 16 | 0x9C10, user_ds, 0, NULL) & 0xFFFF);
     fflush(stdout);
+    /* W16_LIBMAIN=GDI|USER: run that module's own entry (LibEntry: ds =
+     * hInstance = DGROUP, cx = heap size, es:si = command line) and stop at
+     * the first thing it needs that is not there yet. */
+    const char* lm = getenv("W16_LIBMAIN");
+    for (int m = 0; lm && m < 3; m++) {
+        const RecompModule* rm = &RECOMP_MODULES[m];
+        if (_stricmp(lm, rm->name)) continue;
+        static uint8_t* stk;
+        if (!stk) stk = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        CPU r; memset(&r, 0, sizeof r);
+        r.ss = native32_w9x_alloc_sel((uint32_t)(uintptr_t)stk, 0xFFFF); r.sp = 0xFFF0;
+        r.cs = SEL(rm->cs); r.ip = rm->ip;
+        r.ds = r.di = SEL(rm->dgroup); r.cx = rm->heap; r.es = r.ss; r.si = 0xFFF0;
+        if (m == 0) {   /* KRNL386 BootStrap: "KO" from its loader, es = its PSP paragraph */
+            uint32_t w16_real_base(void);
+            uint8_t* rm = (uint8_t*)(uintptr_t)w16_real_base();
+            uint8_t* psp = rm + 0x10000;          /* identity.c W16_PSP_PARA */
+            psp[0] = 0xCD; psp[1] = 0x20;         /* int 20h */
+            *(uint16_t*)(psp + 2) = 0xA000;       /* top of memory */
+            psp[0x80] = 0; psp[0x81] = 0x0D;      /* empty command tail */
+            FILE* f = fopen("work/sys/KRNL386.EXE", "rb");   /* the load module (past the 512-byte MZ header) at PSP+10h */
+            if (f) { fseek(f, 0x200, SEEK_SET); fread(psp + 0x100, 1, 0x40000, f); fclose(f); }
+            r.ax = 0x4B4F; r.es = 0x1000;
+        }
+        printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);
+        int w16_call(CPU*);
+        int ran = w16_call(&r);
+        printf("%s LibMain ran=%d ax=%04X\n", rm->name, ran, r.ax);
+    }
+    fflush(stdout);
     return 0;
 }

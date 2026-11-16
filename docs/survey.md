@@ -497,3 +497,56 @@ still passes with all three seeded. Unread: the FT_ exports
 (FT_USRFTHK 853, FT_USRF2THK 854, FT_GDIFTHK 702: {checksum, 16:16, then
 word pairs}) and the `mov cl,N; push ebp` stubs whose patched
 `mov edx,[ecx*4+X]` uses X = 0xBFF5D400 (the dword at 0xBFF512D6).
+
+### Session 5, step 2: KRNL386's own BootStrap runs, on answered 16-bit interrupts
+
+**GDI's LibMain first.** `W16_LIBMAIN=GDI` runs GDI's entry (15:2795) on
+the host: GlobalSize(DGROUP), then GlobalReAlloc(DGROUP, 0FFFFh, 2), which
+returns 0 because KRNL386 has no global heap: its arena code
+(seg001_3B5C...) reads the Burgermaster selector at KRNL386 DGROUP:121E,
+gi_lrulock at +1E, and arenas ({+0 next, +4 prev, +8 base, +0C size,
++10 handle, +12 owner, +14 sig 'M'/'Z', ...}, written by GlobalInit at
+seg001_C850), with SelTableLen/SelTableStart at DGROUP:1232/1234. So
+"KRNL386's startup data" is its whole global heap: the plan is to let
+KRNL386 build it.
+
+**KRNL386 BootStrap (1:B47F)**, `W16_LIBMAIN=KERNEL`: the host gives it
+what a DOS exec in the System VM would: ax = 4B4Fh ("KO"), es = the PSP
+paragraph 1000h, the load module (KRNL386.EXE past its 512-byte MZ
+header, which covers the whole file) at PSP+10h, in a 1 MB real-mode
+buffer (identity.c `w16_real_base`). Its 16-bit interrupts are answered
+in `runtime/win16/identity/identity.c`, which is now ne_link's `--shims`
+directory for identity mode (so the generated print-and-continue
+int_handler is not made):
+- int 2Fh 1687h (DPMI present; the mode-switch entry is a host far
+  entry that only sets es = the PSP's selector), 168Ah "MS-DOS" vendor
+  API (ax=100h: the LDT alias, vxd32 `native32_w9x_ldt_alias`), 1684h
+  VxD entries from a named table (PAGEFILE 21h and VWIN32 2Ah answered
+  absent from their call sites; any other id stops).
+- int 31h 0000-000C (on vxd32's LDT; 0002 maps paragraphs of the
+  real-mode buffer), 0500/0501/0502 (VirtualAlloc), 0600-0603, 0702/0703.
+- int 21h: 25h/35h (vectors; an unset one is a host entry that runs our
+  handler, so KRNL386's `pushf; call far [old int 21h]` works), 33h, 34h,
+  50h/51h/62h here; the rest goes to vxd32's Int21Dispatch table
+  (`native32_w9x_int21`) with ds:dx, ds:si, es:di made flat.
+- int 11h/12h (BIOS), int 41h (no kernel debugger).
+
+It runs ~16,400 functions: DPMI handshake, CS alias, LDT alias, DOS
+state (break flag, InDOS, drive, 14 vectors), the paging-file probe, a
+557 KB DPMI block for the global heap, and stops in seg001_4AFF/4E52: a
+selector array for a block of 0FBC3xxxxh bytes (int 31h 0000 cx=FBC3 is
+refused; it then tiles descriptors anyway and the lifted `loop` as
+tail-call recursion overflows the C stack). That size is computed from
+something we answered: suspect 0500's buffer (linear-space pages, +0Ch)
+or the 0501 block's base (VirtualAlloc gave ~043Dxxxx; 4 GB minus that
+is FBC3xxxx). Next: read the caller of 4AFF (the FN before 4E8C in a
+W16_FN run) to see which, then continue to GlobalInit (C850) and on.
+
+pcrecomp findings: (1) ne_link's lifter leaves `addr32 rep stosd`
+UNHANDLED (seg001_C850, GlobalInit zeroing the selector table); (2) a
+`loop` back-edge lifted as a tail call recurses on the C stack: 64K
+iterations overflow it. Both before GlobalInit can work.
+
+**Not done this session**: steps 3 (calc on lifted user32/gdi32/kernel32,
+GetKBCodePage through user32's own ord-43/45 path) and 4 (window, DISPLAY
+stand-in, first paint).

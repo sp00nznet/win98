@@ -49,7 +49,7 @@ through kernel32's own QT_Thunk:
 ```
 set NE_IDENTITY_SEL=1
 py -3 tools\w16_seeds.py work\sys > work\seeds\w16.json
-py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE
+py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json --shims ..\pcrecomp-w98\runtime\win16\identity work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE
 sh tools/check_w16.sh
 ```
 
