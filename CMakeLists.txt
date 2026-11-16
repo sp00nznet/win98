@@ -51,7 +51,7 @@ endif()
 # Milestone 2: USER.EXE, GDI.EXE, KRNL386.EXE lifted by ne_link (NE_IDENTITY_SEL=1)
 # into work/w16, built for Win16 identity mode (cpu.h RECOMP_W16_IDENTITY):
 # 16-bit selectors are native32 LDT entries, cpu->mem is 0.
-#   set NE_IDENTITY_SEL=1 & py -3 ../pcrecomp-w98/tools/ne/ne_link.py --work work/w16 work/sys/KRNL386.EXE work/sys/GDI.EXE work/sys/USER.EXE
+#   set NE_IDENTITY_SEL=1 & py -3 ../pcrecomp-w98/tools/ne/ne_link.py --work work/w16 work/sys/KRNL386.EXE work/sys/GDI.EXE work/sys/USER.EXE work/sys/DDEML.DLL
 file(GLOB W16_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/work/w16/src/*.c)
 if(W16_SOURCES)
   add_library(w16 STATIC ${W16_SOURCES})
