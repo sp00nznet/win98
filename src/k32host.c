@@ -23,6 +23,7 @@ void recomp_trace_flush(void);
 uint32_t native32_vwin32_r0_table(void);   /* vxd32.c */
 void native32_w9x_ldt(uint16_t alias_sel, uint32_t* ldt_base);
 uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
+extern uint16_t g_w9x_psp_sel;
 
 #define K32_BASE 0xBFF70000u
 static native32_module_t g_mods[] = { { APP_EXE, APP_BASE }, { "kernel32.dll", K32_BASE } };
@@ -51,6 +52,8 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X ebp=%08X esi=%08X edi=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi);
     native32_dump_icalls(12);
+    fprintf(stderr, "  9CE0=%08X 9CE8=%08X 9D10=%08X 9CEC=%08X\n", MEM32(0xBFFC9CE0u), MEM32(0xBFFC9CE8u), MEM32(0xBFFC9D10u), MEM32(0xBFFC9CECu));
+    recomp_trace_flush();
     fflush(stderr);
     TerminateProcess(GetCurrentProcess(), 3);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -73,12 +76,13 @@ static char g_tail[126];   /* the guest's command tail: what follows "--" */
 uint8_t* g_krnl_dbg;
 
 static int host_main(int argc, char** argv) {
-    const char* sys = "work\\sys";
+    const char* sys = "work\\sys", *root = "work\\root";
     char dir[MAX_PATH];
     int k;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mute")) SetEnvironmentVariableA("PCRECOMP_MUTE", "1");
         else if (!strcmp(argv[i], "--sys") && i + 1 < argc) sys = argv[++i];
+        else if (!strcmp(argv[i], "--root") && i + 1 < argc) root = argv[++i];
         else if (!strcmp(argv[i], "--watchdog") && i + 1 < argc) g_watchdog_s = strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--")) {
             while (++i < argc) { strncat(g_tail, " ", 124 - strlen(g_tail)); strncat(g_tail, argv[i], 124 - strlen(g_tail)); }
@@ -88,6 +92,19 @@ static int host_main(int argc, char** argv) {
         else { printf("usage: %s [--mute] [--sys DIR] [--watchdog S] [-- args]\n", APP_EXE); return 1; }
     }
     GetFullPathNameA(sys, MAX_PATH, dir, NULL);
+    {   /* The guest's C:\ (vxd32 boxes every path under it): a Windows 98
+         * layout with the two modules this program is made of. Built from
+         * your work/sys on first run; nothing outside it is touched. */
+        static const char* const dirs[] = { "", "\\WINDOWS", "\\WINDOWS\\SYSTEM", "\\WINDOWS\\COMMAND", "\\WINDOWS\\TEMP" };
+        char r[MAX_PATH], p[MAX_PATH], src[MAX_PATH];
+        GetFullPathNameA(root, MAX_PATH, r, NULL);
+        SetEnvironmentVariableA("NATIVE32_W9X_ROOT", r);
+        for (int i = 0; i < 5; i++) { _snprintf(p, MAX_PATH, "%s%s", r, dirs[i]); p[MAX_PATH - 1] = 0; CreateDirectoryA(p, NULL); }
+        _snprintf(src, MAX_PATH, "%s\\kernel32.dll", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\KERNEL32.DLL", r);
+        CopyFileA(src, p, TRUE);
+        _snprintf(src, MAX_PATH, "%s\\%s", dir, APP_EXE); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\COMMAND\\%s", r, APP_EXE);
+        CopyFileA(src, p, TRUE);
+    }
     for (int i = 0; i < 1; i++) {   /* the EXE only: hold_image relaunches once per call; 0xBFF70000 is free anyway */
         char img[MAX_PATH];
         _snprintf(img, sizeof img - 1, "%s\\%s", dir, g_mods[i].name);
@@ -115,7 +132,14 @@ static int host_main(int argc, char** argv) {
     *(uint32_t*)(g_boot + 0x10) = 0x0030;        /* the LDT alias (kernel32 writes descriptors through it) */
     { uint32_t ldt; native32_w9x_ldt(0x0030, &ldt); *(uint32_t*)(g_boot + 0x14) = ldt; }   /* +14: the LDT's flat address (MapSL reads it) */
     *(uint32_t*)(g_boot + 0x18) = 0x0040;
-    *(uint32_t*)(g_boot + 0x28) = 0x00480050;    /* +28, +2A: words */
+    {   /* +20/+24: the Windows and system directories (flat strings), +28/+2A
+         * their lengths (_INIT 0xBFFC6CA4 -> 0xBFFC9588/9584, 9590/958C) */
+        static char windir[0x104] = "C:\\WINDOWS", sysdir[0x104] = "C:\\WINDOWS\\SYSTEM";   /* written in place */
+        *(uint32_t*)(g_boot + 0x20) = (uint32_t)(uintptr_t)windir;
+        *(uint32_t*)(g_boot + 0x24) = (uint32_t)(uintptr_t)sysdir;
+        *(uint16_t*)(g_boot + 0x28) = (uint16_t)strlen(windir);
+        *(uint16_t*)(g_boot + 0x2A) = (uint16_t)strlen(sysdir);
+    }
     *(uint32_t*)(g_boot + 0x60) = 0;             /* a byte flag */
     *(uint32_t*)(g_boot + 0x78) = 0x00580040;    /* +78: a size in KB (64), +7A: a selector */
     *(uint32_t*)(g_boot + 0x0C) = 0x0028FFF0u;   /* a gate far pointer; vxd32 answers every call through it */
@@ -144,21 +168,23 @@ static int host_main(int argc, char** argv) {
              * environment and command line from PSP:2C (the environment's
              * selector: "VAR=val\0...\0", a word 1, the program's path) and
              * the command tail at PSP:80. */
-            static uint8_t psp[0x100], env[0x8000];
+            /* A Windows 98 environment, not the host's: the guest's C:\ is
+             * the sandbox root, and host paths mean nothing there. */
+            static const char* const w98_env[] = {
+                "TMP=C:\\WINDOWS\\TEMP", "TEMP=C:\\WINDOWS\\TEMP", "PROMPT=$p$g", "winbootdir=C:\\WINDOWS",
+                "COMSPEC=C:\\WINDOWS\\COMMAND.COM", "PATH=C:\\WINDOWS;C:\\WINDOWS\\COMMAND", "windir=C:\\WINDOWS", NULL };
+            static uint8_t psp[0x100], env[0x1000];
             char* e = (char*)env;
-            LPCH host_env = GetEnvironmentStringsA();
-            for (const char* v = host_env; *v && e - (char*)env < 0x7000; v += strlen(v) + 1)
-                if (*v != '=') { strcpy(e, v); e += strlen(v) + 1; }
-            FreeEnvironmentStringsA(host_env);
+            for (int v = 0; w98_env[v]; v++) { strcpy(e, w98_env[v]); e += strlen(w98_env[v]) + 1; }
             *e++ = 0;
             *e++ = 1; *e++ = 0;
-            _snprintf(e, 0x7F00 - (e - (char*)env), "%s\\%s", dir, APP_EXE);
+            strcpy(e, "C:\\WINDOWS\\COMMAND\\" APP_EXE);
             psp[0] = 0xCD; psp[1] = 0x20;
             *(uint16_t*)(psp + 0x2C) = native32_w9x_alloc_sel((uint32_t)(uintptr_t)env, sizeof env - 1);
             psp[0x80] = (uint8_t)strlen(g_tail);
             memcpy(psp + 0x81, g_tail, psp[0x80]);
             psp[0x81 + psp[0x80]] = 0x0D;
-            *(uint32_t*)(g_boot + 0x08) = native32_w9x_alloc_sel((uint32_t)(uintptr_t)psp, sizeof psp - 1);
+            *(uint32_t*)(g_boot + 0x08) = g_w9x_psp_sel = native32_w9x_alloc_sel((uint32_t)(uintptr_t)psp, sizeof psp - 1);
         }
         /* +44, +54, +58: 16:16 pointers; +50: a selector, KRNL386's global
          * arena (MapSL bumps an arena entry's lock count there). +54 -> the
@@ -170,6 +196,17 @@ static int host_main(int argc, char** argv) {
         }
         void* arena = VirtualAlloc(NULL, 0x10000, MEM_COMMIT, PAGE_READWRITE);
         *(uint32_t*)(g_boot + 0x50) = native32_w9x_alloc_sel((uint32_t)(uintptr_t)arena, 0xFFFF);
+        {   /* +1C -> a word: the boot task's Win16 TDB selector (_INIT's 5th
+             * argument; it lands in PDB+38). kernel32 MapSLs it and reads
+             * +16 flags (10h = Win32 task), +66 the drive (bit 7: the
+             * directory at +100 is valid), +100 the current directory, and
+             * 'TD' sits at +FA. The host's task is on C:\. */
+            static uint8_t tdb[0x200];
+            tdb[0x66] = 0x80 | 2;
+            tdb[0xFA] = 'T'; tdb[0xFB] = 'D';
+            strcpy((char*)tdb + 0x100, "\\");
+            **(uint16_t**)(g_boot + 0x1C) = native32_w9x_alloc_sel((uint32_t)(uintptr_t)tdb, sizeof tdb - 1);
+        }
         /* +7A: a selector kernel32 reads gs:[0] through (a VWIN32 dword) */
         *(uint16_t*)(g_boot + 0x7A) = native32_w9x_alloc_sel((uint32_t)(uintptr_t)VirtualAlloc(NULL, 0x1000, MEM_COMMIT, PAGE_READWRITE), 0xFFF);
     }
