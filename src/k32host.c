@@ -273,7 +273,10 @@ static int host_main(int argc, char** argv) {
     /* kernel32's 32->16 thunks into KRNL386 all go through one slot
      * (`call [0xBFF9AD46]` in the stubs' common tail, normally a stub that
      * patches itself into QT_Thunk): vxd32 answers them by thunk index. */
-    *(uint32_t*)(uintptr_t)0xBFF9AD46u = native32_w9x_krnl386_thunk();
+    {   /* W16_LIBMAIN=KERNEL: KRNL386 is real, so the slot stays kernel32's own */
+        const char* lm = getenv("W16_LIBMAIN");
+        if (!lm || _stricmp(lm, "KERNEL")) *(uint32_t*)(uintptr_t)0xBFF9AD46u = native32_w9x_krnl386_thunk();
+    }
     /* USER32!UserSignalProc, which kernel32 calls unchecked (vxd32) */
     *(uint32_t*)(uintptr_t)0xBFFC95C0u = native32_w9x_user_signal_proc();
     /* VWIN32 stores its ring-0 entry table where the KEXP header's second dword points */

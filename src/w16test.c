@@ -198,7 +198,11 @@ int w16_test(void) {
         }
         printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);
         int w16_call(CPU*);
+        /* inside the machine lock: a nested mach_enter (a wait, a callback)
+         * at depth 0 would reload this thread's saved fs over KRNL386's TIB */
+        mach_enter();
         int ran = w16_call(&r);
+        mach_leave();
         printf("%s LibMain ran=%d ax=%04X\n", rm->name, ran, r.ax);
     }
     fflush(stdout);
