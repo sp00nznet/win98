@@ -24,6 +24,7 @@ uint32_t native32_vwin32_r0_table(void);   /* vxd32.c */
 void native32_w9x_ldt(uint16_t alias_sel, uint32_t* ldt_base);
 uint16_t native32_w9x_alloc_sel(uint32_t base, uint32_t limit);
 extern uint16_t g_w9x_psp_sel;
+uint32_t native32_w9x_krnl386_thunk(void);
 
 #define K32_BASE 0xBFF70000u
 static native32_module_t g_mods[] = { { APP_EXE, APP_BASE }, { "kernel32.dll", K32_BASE } };
@@ -37,7 +38,8 @@ void recomp_not_lifted(uint32_t va) {
     TerminateProcess(GetCurrentProcess(), 2);
 }
 
-recomp_func_t recomp_lookup_manual(uint32_t va) { (void)va; return NULL; }
+recomp_func_t native32_w9x_lookup(uint32_t va);   /* vxd32.c: VWIN32's ring-0 entries */
+recomp_func_t recomp_lookup_manual(uint32_t va) { return native32_w9x_lookup(va); }
 
 static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     EXCEPTION_RECORD* r = ep->ExceptionRecord;
@@ -104,6 +106,19 @@ static int host_main(int argc, char** argv) {
         CopyFileA(src, p, TRUE);
         _snprintf(src, MAX_PATH, "%s\\%s", dir, APP_EXE); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\COMMAND\\%s", r, APP_EXE);
         CopyFileA(src, p, TRUE);
+        {   /* the NLS tables kernel32 maps at boot (unicode.nls, c_<cp>.nls, ...) */
+            WIN32_FIND_DATAA fd;
+            HANDLE f;
+            _snprintf(src, MAX_PATH, "%s\\*.nls", dir);
+            if ((f = FindFirstFileA(src, &fd)) != INVALID_HANDLE_VALUE) {
+                do {
+                    _snprintf(src, MAX_PATH, "%s\\%s", dir, fd.cFileName);
+                    _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, fd.cFileName);
+                    CopyFileA(src, p, TRUE);
+                } while (FindNextFileA(f, &fd));
+                FindClose(f);
+            }
+        }
     }
     for (int i = 0; i < 1; i++) {   /* the EXE only: hold_image relaunches once per call; 0xBFF70000 is free anyway */
         char img[MAX_PATH];
@@ -143,6 +158,10 @@ static int host_main(int argc, char** argv) {
     *(uint32_t*)(g_boot + 0x60) = 0;             /* a byte flag */
     *(uint32_t*)(g_boot + 0x78) = 0x00580040;    /* +78: a size in KB (64), +7A: a selector */
     *(uint32_t*)(g_boot + 0x0C) = 0x0028FFF0u;   /* a gate far pointer; vxd32 answers every call through it */
+    /* kernel32's 32->16 thunks into KRNL386 all go through one slot
+     * (`call [0xBFF9AD46]` in the stubs' common tail, normally a stub that
+     * patches itself into QT_Thunk): vxd32 answers them by thunk index. */
+    *(uint32_t*)(uintptr_t)0xBFF9AD46u = native32_w9x_krnl386_thunk();
     /* VWIN32 stores its ring-0 entry table where the KEXP header's second dword points */
     *(uint32_t*)(uintptr_t)kexp[1] = native32_vwin32_r0_table();
     {   /* boot block +3C: KRNL386's half of the handshake, a 16:16 pointer to a
