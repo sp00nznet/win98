@@ -589,3 +589,73 @@ already there), and KRNL386's four segments inside it (ne_link/gen_image
 placing KERNEL's segments first and low, or a second image base for
 them). Then GlobalInit's conventional arena is right by construction.
 Then: GlobalInit on, GDI/USER LibMain, GetKBCodePage (task 3).
+
+### Session 6: the low layout; GlobalInit completes; BootStrap reaches LoadSegment (handoff)
+
+pcrecomp w98 a547da2, 76d2aa6; win98 14bdc0f, 149697c.
+
+**Low layout (identity only).** Real-mode memory is host linear =
+paragraph*16, 0x10000-0x10FFFF (identity.c `w16_real_base` returns 0). A
+32-bit process already has its activation contexts, process parameters
+and heaps bottom-up in that megabyte by `main()`, and with
+`/DYNAMICBASE:NO` even the *suspended* child of native32's relaunch does.
+So: `native32_hold_range(0x10000, 0x100000)` (new, native32.c) makes
+`native32_hold_image`'s relaunch reserve it too, w16test links
+`/DYNAMICBASE` (then the suspended child's low megabyte is free), and the
+relaunch retries up to 8 times when ASLR happens to land the child's first
+allocations on a held span (it did on 1 run in 6 at 0x400000). KERNEL's
+selectors 1-4 point at its segments where DOS put them (load module at
+PSP+10h, PSP at 1000h), with the *file's* bytes: KRNL386 applies its own
+fixups (seg001_0DED walks each chain from the raw bytes; relocated bytes
+broke the chain). BootStrap is entered with what the MZ stub (load module
++0) leaves: ss = the load module (1010h), sp = si = 200h (the NE header;
+w16test passes 204h because w16_call pushes a far return), ds = DGROUP,
+cx = 400h, bx = 0, es = PSP; PSP+2Ch an environment at A000h with
+`C:\WINDOWS\SYSTEM\KRNL386.EXE` after it (the DPMI switch makes it a
+selector). The 16-bit modules are copied into the guest's SYSTEM dir.
+
+**GlobalInit completes** (args A000h end, start 1025Ch), then its caller
+needs VWIN32's PM API (int 2Fh 1684h bx=2Ah, now present): ah=0 version
+(>= 100h; 040Ah), ah=8 a flag (0), and ax=030xh VMM page services with
+cdecl args on the 16-bit stack that **the entry removes** (ecx bytes;
+1FF7 pops what it pushed before them): 0 _PageReserve (committed at once:
+KRNL386 commits only whole pages inside a block and relies on the partial
+end pages), 1 _PageCommit, 2 _PageDecommit (kept), 3 _PageFree. Also
+answered: int 21h 02/09 (to stderr), 47h, int 10h, DPMI 0004/0005.
+Then it opens its own EXE, builds its module database from the in-memory
+NE header, and runs ~1360 functions to **LoadSegment(KERNEL, 1)**
+(seg001_B635 -> 1135), which relocates segment 1 and then fails:
+`3BA3(handle)` -> `559C` finds no arena for selector **000Fh** in
+KRNL386's selector table (DGROUP:1234). That is SEG_1: the lifted code's
+`push cs` is the fixed identity selector, but KRNL386's tables only know
+selectors it allocated itself (its arenas over its DOS-loaded segments).
+B635 then jumps to the fatal path (BC7E: "KERNEL" + ExitKernel).
+
+**Next.** Pick one: (a) give KRNL386 SEG_1..4 as *its* selectors: find
+where BootStrap allocates its segment selectors (4AFA/4B36 tiling in B4F1,
+the module DB segment table's handle words) and make those calls return
+SEG_n for KERNEL's own segments, so arenas are made for them; or (b) after
+GlobalInit, register SEG_1..4 in the selector table by hand (the arena for
+the DOS-loaded block is there; entry = arena pointer). (a) is the faithful
+one. Expect LoadSegment of seg 1 to copy the segment to new memory only if
+it is not "already loaded"; identity.c's `seg_of` (dispatch of an alias
+selector by equal base) handles aliases, not copies. Then BootStrap's far
+jump into the reloaded copy (`push cs; push [259A]; push B711h; retf`,
+lifted as a far jump in identity mode now) has to land in lifted seg 1.
+Tasks 2-4 of this session (GDI/USER startup with heap entries, calc on
+lifted user32/gdi32/kernel32 with GetKBCodePage via ords 43/45, window
+creation) were not reached.
+
+**Lifter (shared).** lift16: addr32 scas/cmps (b/w/d) lifted on esi/edi,
+rep/repnz forms count ecx; addr32 `movsx` was flagged UNHANDLED only
+because `'movsx'[:4] == 'movs'` matched the string-op filter (fixed).
+w16 tree: no addr32 UNHANDLED left (was 19). ne_lift, identity mode only:
+`push x; retf` is a far jump (dispatch_far), not a C return. ne_codemap
+lost call targets to data decoded as code over them (seg 1 83EA runs
+through 852A, the int 21h handler); tools/w16_seeds.py seeds them for
+KERNEL. pcrecomp gap: a near-call target that lands inside an already
+claimed instruction should win over the linear decode that claimed it.
+Regression: johnny and civnet relift and build in scratch trees (MinGW);
+civnet's lifted C is byte-identical to 380920f's, johnny has no addr32
+sites; check_m1 and check_w16 pass. ne_link exits 1 on civnet on main as
+well (pre-existing).
