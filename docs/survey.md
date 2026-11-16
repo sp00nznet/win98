@@ -1063,3 +1063,98 @@ ponytail (this session):
 - SYSTEM.INI rewritten each run with the stand-in driver names.
 
 **Regression.** check_m1 and check_w16 pass after each runtime change.
+
+### Session 13: the Local32 fault was a truncated disp32; DISPLAY draws; USER32 is Win98's own (handoff)
+
+pcrecomp w98 9f7c227 and this session's commit; win98 this commit. Run:
+`W16_LIBMAIN=KERNEL build/w16test.exe --mute` (relink work/w16 first:
+ne_parse and ne_lift changed). `W16_WINDOW=1` opens the framebuffer window
+(on hiddenrun's desktop), `W16_HOLD=n` keeps the process n seconds after a
+stop so a shot can be taken.
+
+**Root cause (task 1).** Local32Alloc and GDI's Local32 heap were right:
+Local32Init gives GDI's DGROUP (064F) a 32-bit limit (21FFFFh, G) with the
+heap header at ds:10000h (magic LH32, selector table offset 20078h at
+header+60h). GDI reads that header as `mov ebx, ds:[10060h]` (67h, disp32,
+no base). lift16 printed and computed the offset as `& 0xFFFF`, so it read
+ds:[60h], a DGROUP word pair (DF8315B4), and indexed off into the void.
+Fixed in lift16 `_mem_addr`: a [disp32] past 64K is ADDR32 (32-bit). Two
+more found on the way, same family:
+- `btr word ds:[edi], dx` (bt-string, 32-bit base) computed its address in
+  a uint16_t and used the 16-bit accessors: now 32-bit when the base is.
+- ne_parse dropped a code segment's zero tail: GDI seg 11's last `ret 2`
+  ends one byte past file_size (2EEEh of alloc 2EEFh), so it decoded as
+  `leave` and fell off the C function; each call leaked 4 bytes of 16-bit
+  stack, and a later `pop ds` loaded a stack word (1BF6). Code segments are
+  padded to alloc_size.
+johnny and civnet relift identical (C and image) with all three.
+
+**Then (in order).**
+- DISPLAY.14 ExtTextOut (GDI's raster fonts as GDI hands them: FONTINFO is
+  the .FNT header from dfType; 3.0 char table at +52h; glyph offsets from
+  the file start, 66 bytes before FONTINFO; extents for count < 0).
+- DISPLAY cursor ordinals are 101 Inquire (USER seg072_3714 wants 4),
+  102 SetCursor, 103 MoveCursor, 104 CheckCursor (not 100-103).
+- DISPLAY.19 DeviceBitmapBits (icons: 32x32 1 and 4 bpp DIBs set).
+- KERNEL.442 VWIN32_EventCreate (VWIN32 PM API ah=04): a host event (USER's
+  LibEntry failed on 0 and KRNL386 FatalExit'd "USER.EXE").
+- identity rebind: a module's loaded data segments (flags 1|4) are bound
+  too, not only DGROUP and code. USER seg 33 (lifted 84, the per-monitor
+  cursor table at 8Eh) was filled through DGROUP:[508] = its real selector
+  0A17 and read as SEG_84 = 02A7 -> a far call to 0:0.
+- Guest threads get 16 MB stack reservations (vxd32 start_thread): GDI seg
+  5 2DBE/2DE9 walks a table one C call per slot.
+- GDI seg 5 AC05/AC24 pop their own return address and return to their
+  caller's caller (AC05 `call ax`s the continuation first). In C the caller
+  (AACB) went on and ran the continuation twice on an unwound stack (sp
+  1A80 -> 0355). ne_lift (identity): near ret/retf record the offset they
+  pop (cpu->ret_ip); a near call to a function that pops its return address
+  before pushing anything (straight line, or a branch/fall into such a
+  function: `popsret_offsets`) returns too when ret_ip is not the offset it
+  pushed (W16_RETPAST, logged under W16_TRACE). By value, not slot: KRNL386
+  seg1 3B5C pops its return, builds a frame and pushes it back. A global
+  check (every near call) had false positives through the 16->32 stubs
+  (ret popped 41F6), hence the static set. NE_NO_RETPAST=1 turns it off.
+- DISPLAY.1 BitBlt (ROP3 over P/S/D, mono<->color by the DRAWMODE colors),
+  8 Output (OS_POLYLINE, OS_SCANLINES), 9 Pixel. So far every BitBlt lands
+  in GDI memory bitmaps (365 PATCOPY, 8 SRCCOPY): nothing on the screen yet,
+  so no desktop screenshot (the window works: out/w16disp_25.png is black).
+- USER's LibEntry then wanted user32's InitSharedTable (KERNEL.453
+  GetProcAddress32 on the USER32 hModule): the guest's USER32.DLL was the
+  host proxy (30000000h) a plain xcopy run writes. k32host copies Win98's
+  own USER32.DLL over it when W16_LIBMAIN is set; USER.EXE now loads the
+  lifted user32, whose init thunks back into 16-bit code (thunk 38).
+- int 21h from 16-bit code saves/restores g_ds_base/g_es_base around
+  kernel32's handler (only the selectors were).
+
+**Where it stops.** user32 init (BFF53FF0 -> BFF51134 -> BFF58072) QT_Thunks
+(thunk 38) into KRNL386 seg3 0668, a LoadLibrary16 wrapper. LoadLibrary
+(seg2 0DA4 -> 0102 LoadModule -> 0EA0) fails and on its error path a frame
+comes back with bp wrong: at seg002_0FE9 bp is 193A where 0EA0's frame is
+1A98 (look between seg002_0D3A, 2973, 2991 and seg001_3B93 in a W16_FN=2
+trace: one of them leaves bp changed). 18E6's `leave; retf 8` then returns
+with sp 1948, 0668 returns with ds 090F and esi/edi garbage, and kernel32's
+QT_Thunk tail (BFF72913) faults on `mov ss, edi`/fs. Also check what module
+user32 asks for (its name is [bp+6] of 0668): it may simply be missing from
+work/root (then the fix is the file, and the bp bug is a second one).
+
+Not reached: the desktop paint (task 3), GetKBCodePage/calc (task 4),
+16-bit registry (task 5). DISPLAY entries still unnamed when called stop the
+run with their ordinal (StrBlt 11, ScanLR 12, Disable 4, SetPalette 22...).
+
+ponytail (this session):
+- KERNEL.442 VWIN32_EventCreate: auto-reset, unsignaled host event; Set/Wait
+  not wired yet.
+- DISPLAY cursor: shape and position kept, not drawn (the host arrow shows).
+- DISPLAY Output: 1-pixel pens, no dash styles, styles other than polyline/
+  scanlines answer -1 (GDI simulates); DeviceBitmapBits: BI_RGB only, Get
+  writes 1 or 24 bpp; no huge (segmented) bitmaps.
+- The framebuffer window only with W16_WINDOW (check_w16 stays headless).
+- popsret: a function is marked when it pops before any push on its
+  straight line; a pop after a push (or reached through an indirect jump)
+  is not seen.
+- Guest thread stacks 16 MB reserved (a lifted loop across C functions
+  still recurses; a deeper table would need a loop-aware lifter).
+
+**Regression.** check_m1 and check_w16 pass. johnny and civnet relift in
+scratch trees identical to 3962194's (C and mem_image.bin).

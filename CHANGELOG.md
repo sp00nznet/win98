@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Milestone 2, session 13: GDI's Local32 heap works (pcrecomp lift16: a
+  67h [disp32] past 64K stays 32-bit); DISPLAY.DRV stand-in gains BitBlt,
+  Output, Pixel, ExtTextOut, DeviceBitmapBits and the cursor entries, and
+  a host window (W16_WINDOW=1); USER.EXE's LibEntry gets past the keyboard,
+  cursor and event setup and loads Win98's own lifted USER32.DLL.
 - Milestone 2, session 12: KRNL386's parameter-error returns unwind
   correctly (pcrecomp w16_farcall/w16_jmpf); USER.EXE's LibEntry loads
   DISPLAY.DRV, a host stand-in (800x600x16 framebuffer): Enable, Control,

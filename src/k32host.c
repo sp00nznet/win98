@@ -61,6 +61,19 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
         if (SymInitialize(GetCurrentProcess(), NULL, TRUE) &&
             SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)(uintptr_t)r->ExceptionAddress, &disp, &ln))
             fprintf(stderr, "  at %s:%lu\n", ln.FileName, ln.LineNumber);
+        /* the callers: which lifted 16-bit block the inlined accessor was in */
+        CONTEXT c = *ep->ContextRecord;
+        STACKFRAME64 sf = { 0 };
+        sf.AddrPC.Offset = c.Eip; sf.AddrFrame.Offset = c.Ebp; sf.AddrStack.Offset = c.Esp;
+        sf.AddrPC.Mode = sf.AddrFrame.Mode = sf.AddrStack.Mode = AddrModeFlat;
+        for (int i = 0; i < 8 && StackWalk64(IMAGE_FILE_MACHINE_I386, GetCurrentProcess(), GetCurrentThread(), &sf, &c,
+                                             NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL); i++) {
+            char sb[sizeof(SYMBOL_INFO) + 128]; SYMBOL_INFO* si = (SYMBOL_INFO*)sb; DWORD64 d64 = 0;
+            si->SizeOfStruct = sizeof(SYMBOL_INFO); si->MaxNameLen = 127;
+            fprintf(stderr, "    #%d %s", i, SymFromAddr(GetCurrentProcess(), sf.AddrPC.Offset, &d64, si) ? si->Name : "?");
+            if (SymGetLineFromAddr64(GetCurrentProcess(), sf.AddrPC.Offset, &disp, &ln)) fprintf(stderr, " %s:%lu", ln.FileName, ln.LineNumber);
+            fputc('\n', stderr);
+        }
     }
     native32_dump_icalls(12);
     fprintf(stderr, "  9CE0=%08X 9CE8=%08X 9D10=%08X 9CEC=%08X\n", MEM32(0xBFFC9CE0u), MEM32(0xBFFC9CE8u), MEM32(0xBFFC9D10u), MEM32(0xBFFC9CECu));
@@ -205,6 +218,10 @@ static int host_main(int argc, char** argv) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
             }
+            /* Win98's own USER32.DLL (lifted into this host): USER.EXE's LibEntry LoadLibrary32s it
+             * and calls InitSharedTable/InitUsrMprThunks. Over the proxy a plain xcopy run leaves. */
+            _snprintf(src, MAX_PATH, "%s\\USER32.DLL", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", r);
+            if (getenv("W16_LIBMAIN")) CopyFileA(src, p, FALSE);
             {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */
                 WIN32_FIND_DATAA fd;
                 HANDLE f;
