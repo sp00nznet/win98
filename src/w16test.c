@@ -125,9 +125,9 @@ int w16_test(void) {
         if (m == 0) {   /* KRNL386 BootStrap: "KO" from its loader, es = its PSP paragraph */
             uint32_t w16_real_base(void);
             uint8_t* rm = (uint8_t*)(uintptr_t)w16_real_base();
-            uint8_t* psp = rm + 0x10000;          /* identity.c W16_PSP_PARA */
+            enum { W16_PSP = 0x1000 };            /* identity.c W16_PSP_PARA */
+            uint8_t* psp = rm + W16_PSP * 16;
             psp[0] = 0xCD; psp[1] = 0x20;         /* int 20h */
-            *(uint16_t*)(psp + 2) = 0xA000;       /* top of memory */
             psp[0x80] = 0; psp[0x81] = 0x0D;      /* empty command tail */
             {   /* the environment, then (DOS 3+) a word 1 and the program's own path,
                  * which KRNL386 opens: at paragraph A000h, above its arena */
@@ -135,9 +135,22 @@ int w16_test(void) {
                 memcpy(rm + 0xA0000, env, sizeof env);
                 *(uint16_t*)(psp + 0x2C) = 0xA000;
             }
-            FILE* f = fopen("work/sys/KRNL386.EXE", "rb");   /* the load module (past the 512-byte MZ header) at PSP+10h */
+            *(uint16_t*)(psp + 2) = 0xA000;       /* top of the program's DOS block */
+            uint16_t lp = 0x1010;                 /* the load module's paragraph */
+            FILE* f = fopen("work/sys/KRNL386.EXE", "rb");   /* the load module: the file past its 512-byte MZ header */
             if (f) {
-                fseek(f, 0x200, SEEK_SET); fread(psp + 0x100, 1, 0x40000, f);
+                /* KRNL386's e_minalloc and e_maxalloc are both 0: DOS EXEC
+                 * loads such a program high, its image at the top of the
+                 * block (PSP:2) with the PSP still at the bottom. BootStrap
+                 * relies on it: GlobalInit's first arena is the image, the
+                 * space between PSP and image is where LoadSegment puts its
+                 * segments, and the moves it then makes (C37E's slide) are
+                 * 16-bit paragraph deltas inside conventional memory. */
+                uint16_t mz[6];
+                fread(mz, 2, 6, f);
+                uint32_t img = (mz[2] - (mz[1] ? 1u : 0u)) * 512u + mz[1] - mz[4] * 16u;
+                lp = (uint16_t)(0xA000 - (img + 15) / 16);
+                fseek(f, 0x200, SEEK_SET); fread(rm + lp * 16u, 1, img, f);
                 /* KERNEL's selectors point at its segments where DOS loaded them:
                  * load module + (file offset - 200h), so GlobalInit's
                  * paragraph*16 arithmetic holds (identity low layout). The bytes
@@ -147,20 +160,29 @@ int w16_test(void) {
                 fseek(f, 0x3C, SEEK_SET); fread(&ne, 2, 1, f);
                 fseek(f, ne, SEEK_SET); fread(h, 1, sizeof h, f);
                 uint16_t st = *(uint16_t*)(h + 0x22), al = *(uint16_t*)(h + 0x32);
+                /* Code segments 1-3 run from a private copy of the file's
+                 * bytes, not the DOS-loaded image: BootStrap's LoadSegment
+                 * moves each segment down over that image (seg 1 to the load
+                 * module's start) while the lifted code still reads cs:[n]
+                 * through SEG_n until it is rebound to the new selector
+                 * (identity.c w16_rebind). DGROUP (4) stays where DOS put it. */
+                static uint8_t* priv;
+                if (!priv) priv = VirtualAlloc(NULL, 0x40000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                memcpy(priv, rm + lp * 16u, img);   /* with each segment's relocation records after it */
                 for (int s = 1; s <= 4; s++) {
                     uint16_t e[4];
                     fseek(f, ne + st + (s - 1) * 8, SEEK_SET); fread(e, 2, 4, f);
-                    uint8_t* at = psp + 0x100 + ((uint32_t)e[0] << al) - 0x200;
+                    uint8_t* at = (s < 4 ? priv : rm + lp * 16u) + ((uint32_t)e[0] << al) - 0x200;
                     native32_w9x_set_sel(SEL(s), (uint32_t)(uintptr_t)at, 0xFFFF, 1);
                 }
                 fclose(f);
             }
             r.ax = 0x4B4F; r.es = 0x1000;
             /* what KRNL386's MZ stub (the load module's first bytes, entered by
-             * DOS) hands BootStrap: ss = the load module's paragraph (1010h),
+             * DOS) hands BootStrap: ss = the load module's paragraph,
              * sp = si = 200h (its NE header, rounded up from PSP+80h), ds = di =
              * DGROUP, bx = 0 (the NE alignment shift - 4), cx = si + 200h */
-            r.ss = native32_w9x_alloc_sel(0x1010u * 16, 0xFFFF); r.sp = 0x204;   /* w16_call pushes a far return */
+            r.ss = native32_w9x_alloc_sel(lp * 16u, 0xFFFF); r.sp = 0x204;   /* w16_call pushes a far return */
             r.si = 0x200; r.cx = 0x400; r.bx = 0;
         }
         printf("%s LibMain %04X:%04X ds %04X\n", rm->name, r.cs, r.ip, r.ds); fflush(stdout);

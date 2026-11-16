@@ -45,5 +45,8 @@ if __name__ == '__main__':
     # KRNL386 call targets that ne_codemap's descent lost to data decoded as
     # code over them (seg 1 83EA runs through 852A, the int 21h handler it
     # calls as `pushf; push cs; call 852A`): seeds decode first and win.
-    res['KERNEL'] = {'1': ['0x852a', '0xab30'], '3': ['0x3165', '0x3168']}
+    # 1:B711: BootStrap's `push [259A]; push B711h; retf` into segment 1 as
+    # LoadSegment reloaded it (the selector is data, so the code map cannot
+    # follow it). 1:B9E8: where its #UD handler (B9BD) resumes after its ud0.
+    res['KERNEL'] = {'1': ['0x852a', '0xab30', '0xb711', '0xb9e8'], '3': ['0x3165', '0x3168']}
     json.dump(res, sys.stdout)
