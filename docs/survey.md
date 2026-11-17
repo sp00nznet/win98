@@ -2697,3 +2697,53 @@ ponytail (this session):
 **Next.** (1) The tray thread's wait in BFF9420D (and shell32's in BFF93EA7):
 Start menu, Start -> Run -> calc. (2) Icon colours (image list masks vs colour
 bits), rebar grippers. (3) calc keys 1/2, TDB+54.
+
+### Session 33: the Start menu was an unregistered CLSID, not a wait; Start -> Run -> calc (handoff)
+
+pcrecomp w98: vxd32 `W98_STACKS=secs` (every 5 s from then, each guest thread's host
+stack named through the PDBs: lifted sub_/segNNN_ frames, i.e. who waits where) and a
+"woke" line under NATIVE32_VXD. Re-run `tools/reginst.py w98\xcopy`; no lifter, generator
+or disasm change (johnny/civnet not relifted). Rebuild: build.cmd.
+
+**Root cause (task 1).** BFF9420D and BFF93EA7 are not stuck: with W98_STACKS they are
+USER's idle waits. 9420D is kernel32's 16->32 thunk for WaitForSingleObjectEx, reached
+from USER seg054 0E17 (WaitMessage): the tray thread's loop 01406C8E and the desktop
+thread idle there. 93EA7 is the MsgWaitForMultipleObjects one (USER seg067 00C1),
+shell32's 7FCB8A1A worker and three other message-loop threads idle there. (The one
+thread in a 16-bit SendMessage is MSGSRV32's task (seg089 = MSGSRV32), yielding through
+KRNL386's scheduler; it is switched back to periodically.) The click did arrive:
+`--firsthit` showed the tray's WM_COMMAND 0x132 -> 014085BE, which calls
+[0x1415110]->Popup only if the Start menu object exists. It was created by
+014054B3 -> CoCreateInstance(CLSID {4622AD11-FF23-11D0-8D34-00A0C90F2719}, IMenuPopup),
+and that CLSID is registered only by **shdoc401.dll's REGINST** INF, which reginst.py
+did not read. Fixes (reginst.py): shdoc401 is read first (shdocvw/browseui win on the 3
+keys they share); INF continuations accept `\` + `\r\r\n` (shdoc401's "Default Taskbar"
+stream). Now a real click opens Win98's Start menu (out/s33_startmenu.png).
+
+**Task 2.** Start -> Run -> "calc" -> OK starts the lifted calc in the same process
+(kernel32 CreateProcess; C:\WINDOWS\CALC.EXE through int 21h, no host process):
+out/s33_run_calc.png, out/s33_run_dialog.png. New gate `tools/check_run.sh`.
+Note: W16_INPUT coordinates are screen coordinates; the shots add the 8,31 frame.
+
+**Host leaks found and closed (reginst whole keys).** Run's edit box said "explorer"
+(the host's RunMRU), the Desktop folder was the host's profile Desktop (C:\Users\...,
+boxed under work/root but a leak) and the cursors the host's *_eoa.cur. Marked whole:
+HKCU Control Panel\Cursors, Explorer\RunMRU, Shell Folders and User Shell Folders (HKCU
+and HKLM); their cached values are cleared on each reginst run. Now C:\WINDOWS\Desktop.
+
+ponytail (this session):
+- reginst: shdoc401 before shdocvw/browseui; on shared keys the later DLL's value wins.
+- reginst whole keys: only the ones above; other Explorer keys still read through.
+- W98_STACKS: suspends each thread to walk it (a thread holding the CRT heap lock
+  could stall the dump); debug only. Its "boot" line is the tick thread, not boot.
+
+**Not done.** Task 3 (icons white silhouettes: comctl32 image lists are 4 bpp DIB
+sections in the DIBENG stand-in, colour table captured at creation; start with the
+image list's colour bitmap after ImageList_ReplaceIcon), the rebar gripper, Start menu
+item icons (absent: same image-list path), Favorites submenu empty with no highlight
+colour, task 4 (m1 flake not seen: 1 run, passed), task 5.
+
+**Regression.** check_m1, w16, calc, sol, winmine, notepad, explorer, run all pass.
+
+**Next.** (1) Image-list colour bits (desktop, Start menu icons). (2) Gripper. (3) The
+Favorites submenu highlight. (4) calc keys 1/2, TDB+54.

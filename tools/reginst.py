@@ -5,7 +5,7 @@
 
 What Win98 setup writes for the shell: shell.inf's [shell] AddReg sections,
 ieshell.inf's [MSIE4shell_Inst] (the integrated shell), and the REGINST
-resources of the DLLs ieshell.inf registers (shell32, shdocvw, browseui:
+resources of the DLLs ieshell.inf registers (shdoc401, shell32, shdocvw, browseui:
 their DllRegisterServer hands advpack these INFs). All into
 HKCU\\Software\\pcrecomp\\BOX\\{HKLM,HKCU} (pcrecomp regbox32.c; HKCR is
 HKLM\\SOFTWARE\\Classes there). Paths stay the guest's (C:\\WINDOWS...),
@@ -23,7 +23,7 @@ LDID = {'10': r'C:\WINDOWS', '11': r'C:\WINDOWS\SYSTEM', '25': r'C:\WINDOWS', '3
 
 def sections(text):
     sec, cur = {}, None
-    for l in re.sub(r'\\[ \t]*\r?\n\s*', '', text).splitlines():   # INF line continuations
+    for l in re.sub(r'\\[ \t]*\r*\n\s*', '', text).splitlines():   # INF line continuations
         s = l.strip()
         if not s.startswith('"'):
             s = re.sub(r';.*$', '', s) if '"' not in s else s
@@ -80,7 +80,9 @@ def main():
     box = sys.argv[1]
     items = list(inf_install(os.path.join(SYS, 'shell.inf'), 'shell')) \
         + list(inf_install(os.path.join(SYS, 'ieshell.inf'), 'MSIE4shell_Inst'))         + list(inf_install(os.path.join(SYS, 'timezone.inf'), 'Install_TimeZone'))
-    for d in ('shell32.dll', 'shdocvw.dll', 'browseui.dll'):
+    # shdoc401 first (Win98 SE's integrated shell: the Start Menu bar, CLSID 4622AD11, lives
+    # only there). ponytail: on its 3 keys that shdocvw also writes, shdocvw's win.
+    for d in ('shdoc401.dll', 'shell32.dll', 'shdocvw.dll', 'browseui.dll'):
         items += list(reginst(d))
     n = 0
     for hive, key, name, flags, val, *data in items:
@@ -141,8 +143,20 @@ def main():
             winreg.SetValueEx(k, nm, 0, winreg.REG_SZ, v)
     # USER's appearance keys are the guest's whole (pcrecomp regbox32.c "pcrecomp:whole"): a value
     # Win98 has not written falls to USER's own default, not to Windows 11's (white faces, a black desktop)
-    for k in (r'Control Panel\Colors', r'Control Panel\Desktop', r'Control Panel\Desktop\WindowMetrics'):
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\pcrecomp\%s\HKCU\%s' % (box, k)) as h:
+    # The same for the cursor scheme (the host's *_eoa.cur paths), the shell folders (the host's
+    # profile Desktop: shell32 computes C:\WINDOWS\Desktop when none is set) and Run's MRU.
+    # ponytail: these keys only; other Explorer keys Win98 does not write still read through.
+    xp = r'Software\Microsoft\Windows\CurrentVersion\Explorer'
+    for k in (r'HKCU\Control Panel\Colors', r'HKCU\Control Panel\Desktop', r'HKCU\Control Panel\Desktop\WindowMetrics',
+              r'HKCU\Control Panel\Cursors', 'HKCU\\' + xp + r'\Shell Folders', 'HKCU\\' + xp + r'\User Shell Folders',
+              'HKCU\\' + xp + r'\RunMRU', 'HKLM\\' + xp + r'\Shell Folders', 'HKLM\\' + xp + r'\User Shell Folders'):
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\pcrecomp\%s\%s' % (box, k)) as h:
+            if xp in k:   # shell32's caches of an earlier run (Desktop = the host's) go
+                vals, i = [], 0
+                while True:
+                    try: vals.append(winreg.EnumValue(h, i)[0]); i += 1
+                    except OSError: break
+                for v in vals: winreg.DeleteValue(h, v)
             winreg.SetValueEx(h, 'pcrecomp:whole', 0, winreg.REG_DWORD, 1)
     # Every class key Win98's INFs wrote is the guest's whole too: a value they leave out
     # (My Computer's CLSID has no default, shell32 then uses its own "My Computer") must not
