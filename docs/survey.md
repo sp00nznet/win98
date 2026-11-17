@@ -2556,3 +2556,79 @@ loaded the machine); it passed alone four times.
 **Next.** (1) The ole32 QueryInterface stack break above, then Explorer's
 desktop and taskbar paint, check_explorer.sh. (2) Start menu, Start -> Run ->
 calc. (3) The `_ss_fn` call push (see ponytails). (4) Task 5 items.
+
+### Session 31: the ole32 stack break (push; ret), VMM registry numbers, pattern brushes (handoff)
+
+pcrecomp w98 e844765 (lifter, generate, runtime) and dac092e (pattern
+brushes). Relift w16test with the README line after `tools/vtseeds.py` for the
+five COM modules (it now also seeds one-slot vtables), then build.cmd. johnny and
+civnet were relifted into work/s31/s31-* trees with 95b732c and with this
+pcrecomp, normal and identity mode: identical work/ trees, all four.
+
+**Root cause of the ole32 "QueryInterface" stack break (task 1).** It was not
+QI and not a vtable arity. sub_7F435E44 calls 7F43600C, which calls
+RpcServerRegisterIfEx through ole32's delay-load slot 7F4B2F70. RPCRT4 is
+absent, so the delay-load stub 7F4399D7 takes its failure path 7F44C4E7:
+`push dword ptr [eax+8]; mov eax, 8; ret` -- a jump to a `ret 18h` stub
+(7F44C537) that pops the caller's six arguments and returns
+HRESULT_FROM_WIN32(8). Lifted as a plain return, the stub never ran: the
+caller's esp came back 1Ch short (the dummy return plus 18h of arguments),
+`pop ebp` popped the dummy 0, and two frames later `mov esp, ebp` made esp 14h,
+then 1Ch. Found by printing ebp/esp after each call of the frames on the fault
+stack (generated C only, scratch). Fix (lift32, every mode): a bare `ret`
+whose last stack op was a push (only mov/movzx not writing esp/ebp between, and
+no branch target or block start in between: generate.py hands its targets and
+leaders to the lifter) pops the pushed value and RECOMP_RET_JUMPs there. 10
+sites in the Win98 lift (kernel32 BFFC094D `push eax; ret` among them; msvcrt's
+_SEH_prolog `push eax; ret` jumps to the dummy return, which is a return).
+test_computed_ret.py covers it.
+
+**Then (same task).** advapi32's Reg* exports name their VMM services: 14
+RegDeleteKeyA, 16 RegDeleteValueA, 1C RegFlushKey. **A wrong guess that
+changed state:** 16 was mapped as RegDeleteKey (session 29), so any
+RegDeleteValue of a guest since then deleted a whole key in the registry box
+(boxed, never the real registry; re-run `tools/reginst.py w98\xcopy` if the box
+looks short). Now 14 and 16 are right. int 21h 71A3 (shell32 watching a folder
+for changes, from FindFirstChangeNotification) fails with 32h. A one-slot
+vtable in .text (ole32 7F42A670: a destructor only, 7F427FEB) was called
+through ICALL as native and faulted (guest memory non-executable, as it should):
+vtseeds.py now takes a lone code pointer whose slot address something points at.
+
+**Task 4 (calls on a 16-bit ss).** generate.py rewrites RECOMP_CALL/ICALL in
+an `_ss_fn` to RECOMP_CALL_SS/ICALL_SS (recomp_types.h): the dummy return goes
+to SS_BASE + esp, not into low linear memory. Gates unchanged.
+
+**Explorer now.** Past ole32: browseui's bands load, a second Explorer thread
+runs 16-bit USER. It stops after ~1 s in kernel32's 16->32 dispatcher
+BFF71903, reached through KRNL386's window-proc relay (seg001_76BA -> w16_retf):
+"16->32 stub's function returned without its retf BFF7:1903" (with W16_TRACE
+the timing changes and it faults after `lss sp, [esp]; pop ebx` reading text,
+or shows `[retf32] flat 0 ss 15FF@0001618C`, the second thread's stack selector
+with a base in low memory). Same faults with the _SS call push switched off, so
+that is not it. Suspect: the relay's W16_BACK_ANY wait (g_thk is per thread)
+vs. the second thread's stack selector 15FF (its base changes between runs:
+freed/reused, or read before its descriptor is set). No paint of Explorer's own,
+so no check_explorer.sh, no Start menu (tasks 2, 3 not reached).
+
+**Task 5.** Notepad's scroll bars: BS_PATTERN brushes realize from their
+bitmap (GDI passes a far pointer to the PBITMAP in lbColor: 124E:0000 seen);
+a mono one takes the DRAWMODE colours in BitBlt (1 -> background): white/silver
+C6C3C6 checker as on Win98 (out/s31np_scroll.png, not committed). calc keys 1/2
+and TDB+54 not done.
+
+ponytail (this session):
+- push; ret: only mov/movzx between the push and the ret; a push further up
+  with other instructions between stays a return.
+- 71A3 change notification: unsupported; no folder watch.
+- Pattern brushes: BitBlt only (lines/polygons use the pattern unmapped);
+  mono pattern colour rule = mono source rule; BS_DIBPATTERN still solid.
+- vtseeds: lone .text pointers that nothing points at are still skipped.
+
+**Regression.** check_m1, check_w16, check_calc, check_sol, check_winmine,
+check_notepad pass after every runtime change.
+
+**Next.** (1) The second thread's relay stack (15FF base) above: trace
+selector 15FF's descriptor writes (GlobalAlloc/Free of the thread's 16-bit
+stack) and which thread is in w16_retf when the stub returns without its retf.
+(2) Explorer paint, check_explorer.sh, Start menu, Start -> Run -> calc.
+(3) calc keys 1/2, TDB+54.

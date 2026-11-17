@@ -9,7 +9,8 @@ a time. Every relocated dword that points into the code section is taken as a
 function, when it sits in a run of two or more such pointers (or outside the
 code section), except runs that a `jmp [reg*4+table]` names (switch tables:
 labels, not functions). An existing seed file's entries are kept.
-ponytail: a lone code pointer inside .text is skipped (could be an immediate).
+A lone one counts when something points at its slot (a one-method vtable).
+ponytail: other lone code pointers inside .text are skipped (could be immediates).
 """
 import json, os, re, struct, sys
 import pefile
@@ -31,9 +32,12 @@ skip = set()
 for t in tables:   # the whole run of a switch table
     s = t
     while s in code: skip.add(s); s += 4
+# a one-slot vtable in .text (ole32 7F42A670, a destructor only) is a lone pointer,
+# but its slot is named by a relocated `mov [ecx], 7F42A670`
+named = set(ptr.values())
 seeds = set()
 for s in code - skip:
-    if not in_text(b + s) or (s - 4) in code or (s + 4) in code:
+    if not in_text(b + s) or (s - 4) in code or (s + 4) in code or b + s in named:
         seeds.add(ptr[s])
 out = sys.argv[2] if len(sys.argv) > 2 else None
 old = set()

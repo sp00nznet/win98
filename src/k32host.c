@@ -68,9 +68,9 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
                            (LPCSTR)r->ExceptionAddress, &hm) && hm != GetModuleHandleA(NULL)
         && !GetProcAddress(hm, "recomp_part_dispatch"))   /* a part DLL's lifted code is ours too */
         return EXCEPTION_CONTINUE_SEARCH;
-    fprintf(stderr, "\n=== fault 0x%08lX at %p (addr %08lX) ===\n  in lifted sub_%08X, last native call %s\n",
+    fprintf(stderr, "\n=== fault 0x%08lX at %p (addr %08lX) thread %lu ===\n  in lifted sub_%08X, last native call %s\n",
             r->ExceptionCode, r->ExceptionAddress,
-            r->NumberParameters > 1 ? (unsigned long)r->ExceptionInformation[1] : 0ul, g_cur_func, g_cur_import);
+            r->NumberParameters > 1 ? (unsigned long)r->ExceptionInformation[1] : 0ul, GetCurrentThreadId(), g_cur_func, g_cur_import);
     fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X ebp=%08X esi=%08X edi=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi);
     if (r->ExceptionCode == 0xC0000005u && !IsBadReadPtr(r->ExceptionAddress, 48)) {   /* guest bytes reached as code (data, a run-time stub): shown, never run */
