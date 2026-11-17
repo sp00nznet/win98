@@ -2,7 +2,7 @@
 
 Stage 1 survey of the kernel boundary. `tools/survey.py work/sys/kernel32.dll` (and `--thunks`) reproduces it.
 
-## Status: done / what works / known gaps (as of Session 37)
+## Status: done / what works / known gaps (as of Session 38)
 
 **Done enough to use.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit, kernel32/user32/gdi32/shell32/
 Explorer and friends lifted 32-bit) boots on Windows 11 as one program, no emulator or VM, all in `work/root`.
@@ -13,10 +13,11 @@ Explorer and friends lifted 32-bit) boots on Windows 11 as one program, no emula
 - Win98's Explorer as the shell: desktop icons, taskbar, clock, Start menu (check_explorer);
   Start > Run > calc (check_run); Start > Programs > Accessories > Notepad and Games > Solitaire,
   with taskbar buttons (check_startprog).
-- Double-clicking My Computer opens its folder window with a taskbar button, no fault (check_mycomp).
+- Double-clicking My Computer opens and paints its folder window ((C:), Printers, Control Panel), and double-clicking
+  (C:) lists work/root in it (check_mycomp).
 
 **Known gaps.**
-- The My Computer window does not paint (its frame gets no WM_PAINT/NCPAINT drawing on screen); so the C: window is not reached.
+- The folder window's Back button draws magenta; the desktop icons' labels under the window are clipped after it opens.
 - Explorer's toolbar gripper, Favorites, Internet Explorer's icon, calc keys 1/2 (dark), TDB+54 (Session 36 list).
 - Intermittent far-call miss at 0A2F:1C63 (seen once in Session 36; not in 5 runs in Session 37).
 - No sound, network, printing or real devices, by design.
@@ -2956,3 +2957,35 @@ ponytail (this session):
 - A use32 near target is assumed under 64K (`call/jmp reg32` dispatches its low word).
 
 Not done: the C: window, task 3 (gripper, Favorites, IE icon, calc keys, TDB+54).
+
+### Session 38: USER's thunk entries jump by retf (GetWindowPlacement never ran); My Computer paints, C: opens (handoff)
+
+pcrecomp w98 04f6581 (runtime only: identity.c, vxd32.c, drv16.c). No lifter, generator or disasm change, so no relift.
+
+**Root cause (task 1).** Window 0100 is the frame (its WND, read with the new `wnd 85:HWND@T`, links child 014C and
+0150, the view). Its rcWindow was 22,22,22,22: shell32 7FCD9795.. sizes the frame to its view with
+SetWindowPos(0100, cx -22773, cy -10152, SWP_NOMOVE|NOZORDER), clamping against GetWindowPlacement's rcNormalPosition,
+and that was stack garbage. user32's GetWindowPlacement (BFF52D12) converts to a 16-bit WINDOWPLACEMENT and goes
+through its FT thunk (3Fh) to USER 0B07:00C0 = seg31 00C0: `mov bx,20h; push dword cs:[bx]; call far <version check>;
+...; retf` -- the retf pops the pushed target, a far jump to USER's GetWindowPlacement. ne_lift sees the push and the
+retf in different blocks (00C8, 00E9), so it emitted a plain retf, which w16_retf took as a return: the 16-bit function
+never ran, for every thunk entry built this way in seg31. Fix (runtime, where every plain retf goes): a plain retf with
+exactly one far pointer above the current direct far call's return (sp + 4 == the frame's sp) is a far jump
+(w16_retf_jmp -> w16_jmpf). Not a WM_NCCALCSIZE, GetClientRect or RECT-conversion bug.
+
+**What runs.** My Computer paints at 22,22 407x380 with (C:), Printers, Control Panel and "3 object(s)"
+(out/s38_mycomp.png). Double-clicking (C:) died on int 21h AX=7303 (FAT32 Get_ExtFreeSpace) from kernel32; now
+answered with the same fixed drive as 1Ch, and C:\ opens in the same window listing work/root (out/s38_c.png).
+check_mycomp now checks both screens (white client, icons, labels, the yellow folders, taskbar button).
+
+**Debug aids.** W16_INPUT `wnd N:HWND@T` dumps a WND (N = USER's DGROUP, 85; table at 10000h+hwnd, rcWindow +10h,
+rcClient +18h as RECT16). W16_QTARGS=OFF prints the 32-bit args of QT/FT thunks into xxxx:OFF.
+
+ponytail (this session):
+- w16_retf_jmp: only exactly one pointer above a direct far call's frame; an indirect far call as a framed
+  function's first instruction would look the same.
+- Int 21h 7303: a fixed 64x512x65535 drive, half free, C: only.
+
+Regression: all 10 gates pass (m1 w16 calc sol winmine notepad explorer run startprog mycomp).
+
+Not done: gripper, Favorites, IE icon, calc keys 1/2, TDB+54, the far-call miss (task 2). Next: those, then the Back button colour.

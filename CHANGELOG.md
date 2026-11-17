@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Session 38: My Computer paints (C:, Printers, Control Panel) and double-clicking C: lists work/root. USER's 16-bit thunk entries reach their function by a `retf` to a pushed pointer, which the runtime took as a return, so GetWindowPlacement never ran and the folder frame was sized from stack garbage (pcrecomp: retf above a far call's return is a far jump). Int 21h 7303 (FAT32 free space) answered. check_mycomp now checks the painted window and the C: listing.
 - Session 37: GDI's 32-bit (use32) code segments are now decoded as 32-bit code (pcrecomp edb2030), which fixes the crash when My Computer is double-clicked. The folder window opens with a taskbar button but does not paint yet. Added tools/check_mycomp.sh and a status summary at the top of docs/survey.md.
 - Session 30: the host is now a small exe plus one DLL per lifted module
   (pcrecomp's pcrecomp_gen_parts); the single image of the whole shell lift
