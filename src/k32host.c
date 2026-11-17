@@ -184,7 +184,16 @@ static int write_proxy_dll(const char* path, const char* dll, uint32_t base, con
     memcpy(s, ".edata", 6);
     *(uint32_t*)(s + 8) = p; *(uint32_t*)(s + 12) = SEC; *(uint32_t*)(s + 16) = sz; *(uint32_t*)(s + 20) = HDR;
     *(uint32_t*)(s + 36) = 0x40000040;                              /* initialised data, readable */
-    FILE* f = fopen(path, "wb");
+    /* the same bytes already there: leave the file alone (another guest process,
+     * e.g. w16test next to check_m1's xcopy, may have it mapped; "wb" would fail) */
+    FILE* f = fopen(path, "rb");
+    if (f) {
+        static uint8_t old[sizeof img];
+        size_t got = fread(old, 1, sizeof old, f);
+        fclose(f);
+        if (got == HDR + sz && !memcmp(old, img, got)) return m;
+    }
+    f = fopen(path, "wb");
     if (!f) return 0;
     fwrite(img, 1, HDR + sz, f);
     fclose(f);

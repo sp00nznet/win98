@@ -191,6 +191,7 @@ def main():
     th.join()
     print('exit', p.poll(), f'after {time.time() - t0:.1f}s')
     subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True)
+    k32.WaitForSingleObject(p.h, 10000)   # gone (its mapped files released) before the next run starts
     u32.CloseDesktop(desk)
 
 

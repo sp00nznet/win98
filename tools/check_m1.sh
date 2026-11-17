@@ -3,7 +3,7 @@
 # then xcopy's CRLF), and a /S /I copy inside the sandbox is byte-identical.
 #   sh tools/check_m1.sh        (after tools/lift.py xcopy ...)
 cd "$(dirname "$0")/.." || exit 1
-sh tools/run_xcopy.sh -- /? > /dev/null 2>&1
+sh tools/run_xcopy.sh -- /? > /dev/null 2>&1; cp work/run.txt work/m1_help.txt   # each run's log kept
 grep -av '^\[' work/run.txt | tail -n +2 > work/help.txt
 py -3 - <<'E' || exit 1
 import pefile, struct, sys
@@ -24,9 +24,9 @@ E
 R=work/root/TEST
 rm -rf $R && mkdir -p $R/SRC/SUB && printf 'hello win98\r\n' > $R/SRC/A.TXT &&
   head -c 70000 /dev/urandom > $R/SRC/B.BIN && printf 'nested\r\n' > $R/SRC/SUB/C.TXT
-sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I | grep "copied"
+sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I | grep "copied"; cp work/run.txt work/m1_copy.txt
 diff -r $R/SRC $R/DST && echo "copy identical"
 # /P on scripted stdin: y, n, y copies A.TXT and SUB\C.TXT only
 rm -rf $R/DST
-printf 'y\r\nn\r\ny\r\n' | sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I /P | grep "copied"
+printf 'y\r\nn\r\ny\r\n' | sh tools/run_xcopy.sh -- 'C:\TEST\SRC' 'C:\TEST\DST' /S /I /P | grep "copied"; cp work/run.txt work/m1_p.txt
 [ -f $R/DST/A.TXT ] && [ ! -f $R/DST/B.BIN ] && [ -f $R/DST/SUB/C.TXT ] && echo "/P answers honoured"
