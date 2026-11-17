@@ -3019,7 +3019,7 @@ so no relift (task 5's relift rule did not trigger).
 
 **The leak (task 1).** work/root held `%USERPROFILE%` (AppData\Roaming\Microsoft\Windows\{Recent,Start Menu\Programs\Startup},
 Favorites), `%PUBLIC%\Desktop`, `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup` and
-`Users\nedch\OneDrive\Desktop`. These are exactly the host's values: HKCU `...\Explorer\User Shell Folders` (REG_EXPAND_SZ
+`Users\<user>\OneDrive\Desktop`. These are exactly the host's values: HKCU `...\Explorer\User Shell Folders` (REG_EXPAND_SZ
 `%USERPROFILE%\...`), HKLM User Shell Folders (`Common Startup` = `%ProgramData%\...`, `Common Desktop` = `%PUBLIC%\Desktop`)
 and HKCU Shell Folders `Desktop` = the host's OneDrive Desktop. Win98's shell32 does not expand environment strings in
 these, so it created them literally under the boxed C:\. Timestamps: Users 11-16 23:30, `%USERPROFILE%`/`%PUBLIC%`
