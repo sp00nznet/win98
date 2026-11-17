@@ -15,7 +15,7 @@ copy (extracted CAB files, catalogs, lifted C) goes into the gitignored
 | 1 | Survey of the kernel boundary (`tools/survey.py`) | VxDCall gate, flat-thunk tables, 16-bit int 21h/2Fh/31h mapped |
 | 2 | PE accessories on native32 against host DLLs | calc and notepad run (winmine/sol/freecell are Win16 on 98) |
 | 3 | console program on Win98's own kernel32 + vwin32 shim | milestone 1: `xcopy32 /?` prints its own help (exactly its string resources) and `xcopy32 C:\TEST\SRC C:\TEST\DST /S /I` copies a tree in the sandbox, byte-identical |
-| 4 | GUI on lifted user32/gdi32 + USER.EXE/GDI.EXE via recomp16 | design written (docs/survey.md); lifted kernel32's QT_Thunk calls lifted USER.EXE (GetSystemMetrics) and comes back, in one address space (`tools/check_w16.sh`) |
+| 4 | GUI on lifted user32/gdi32 + USER.EXE/GDI.EXE via recomp16 | Win98 boots its own KRNL386/USER/GDI; calc (12+3= shows 15., `tools/check_calc.sh`) and Solitaire (W16_SHELL=sol.exe) run as the shell |
 
 ## Building
 

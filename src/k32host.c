@@ -269,8 +269,14 @@ static int host_main(int argc, char** argv) {
             /* and SHELL.NEW as SHELL.DLL (shell.inf), SHELL32's partner (Shl3216_ThunkData16) */
             _snprintf(src, MAX_PATH, "%s\\shell.new", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\SHELL.DLL", r);
             CopyFileA(src, p, FALSE);
-            _snprintf(src, MAX_PATH, "%s\\calc.exe", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\CALC.EXE", r);
-            CopyFileA(src, p, TRUE);
+            {   /* the accessories a W16_SHELL may name, under their installed names (accessor.inf, games.inf) */
+                static const char *const prog[][2] = { { "calc.exe", "WINDOWS\\CALC.EXE" }, { "notepad.exe", "WINDOWS\\NOTEPAD.EXE" },
+                    { "winmine.exe", "WINDOWS\\WINMINE.EXE" }, { "sol.exe", "WINDOWS\\SOL.EXE" }, { "cards.dll", "WINDOWS\\SYSTEM\\CARDS.DLL" } };
+                for (int i = 0; i < (int)(sizeof prog / sizeof *prog); i++) {
+                    _snprintf(src, MAX_PATH, "%s\\%s", dir, prog[i][0]); _snprintf(p, MAX_PATH, "%s\\%s", r, prog[i][1]);
+                    CopyFileA(src, p, TRUE);
+                }
+            }
             {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */
                 WIN32_FIND_DATAA fd;
                 HANDLE f;

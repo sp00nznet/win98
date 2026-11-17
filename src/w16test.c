@@ -198,8 +198,9 @@ int w16_test(void) {
                 if (ini) {
                     fputs("[boot]\nsystem.drv=system.drv\nkeyboard.drv=keyboard.drv\nmouse.drv=mouse.drv\n"
                           "display.drv=display.drv\ncomm.drv=comm.drv\nsound.drv=mmsound.drv\n"
-                          "fonts.fon=vgasys.fon\nfixedfon.fon=vgafix.fon\noemfonts.fon=vgaoem.fon\nshell=calc.exe\n"
-                          "\n[boot.description]\ndisplay.drv=pcrecomp host display\n", ini);
+                          "fonts.fon=vgasys.fon\nfixedfon.fon=vgafix.fon\noemfonts.fon=vgaoem.fon\n", ini);
+                    fprintf(ini, "shell=%s\n", getenv("W16_SHELL") ? getenv("W16_SHELL") : "calc.exe");   /* W16_SHELL=winmine.exe, ... */
+                    fputs("\n[boot.description]\ndisplay.drv=pcrecomp host display\n", ini);
                     fclose(ini);
                 }
             }

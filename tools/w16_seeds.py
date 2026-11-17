@@ -98,4 +98,8 @@ if __name__ == '__main__':
     # GDI 11:2B73 `call cs:[si+2CADh]`: three near stubs (`jmp far` to imports)
     # its init steps through, counted by the words at 2C96h (1, 6, 4, 0).
     res['GDI'].setdefault('11', []).extend(['0x2c9e', '0x2ca3', '0x2ca8'])
+    # SOL 4:1644, a callback it stores (`mov ax,1644h; mov bx,[bp-6]; mov dx,seg4`)
+    # and calls far through [bp-16h]; ne_codemap's weak descent from there is rejected
+    # (an overlap it reaches in seg 8), so it is a seed.
+    res['SOL'] = {'4': ['0x1644']}
     json.dump(res, sys.stdout)

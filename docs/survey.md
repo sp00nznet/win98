@@ -2115,3 +2115,75 @@ ponytail (this session):
 log the DRAWMODE text colour in ExtTextOut and compare with the
 SetTextColor calls calc makes for those buttons. (3) Shifted keys in
 W16_INPUT. (4) Watch work/m1_p.txt for the residual check_m1 flake.
+
+### Session 26: Marlett caption buttons, shifted keys, check_calc gate, Solitaire as the shell (handoff)
+
+Relink work/w16 with the README ne_link line plus `work/sys/winmine.exe
+work/sys/sol.exe work/sys/cards.dll` (lifted segs 106-120), after
+`py -3 tools/w16_seeds.py work/sys > work/seeds/w16.json` (new SOL 4:1644 seed).
+No lifter or disasm change is committed (a tried ne_codemap change was
+reverted), so johnny/civnet were not relifted.
+
+**Gate.** `sh tools/check_calc.sh` boots to calc, keys 1 2 + 3 =, and compares
+calc's display (shot box 72,130-310,155) with work/calc_ref_15.png (cut from
+out/s25key_15.png on first use; a Win98 render, never committed).
+
+**Shifted keys.** W16_INPUT `key C@T` sends Shift down/up around a key whose
+VkKeyScan has the shift bit; `text STR@T` types a string. `text 12*3=@40`
+shows 36. (out/s26shift_48.png).
+
+**Marlett.** GDI asks the display driver's RealizeObject (style 3) with the
+LOGFONT before it falls back to raster fonts. For face MARLETT, drv16 now
+answers with a device font: Win98's marlett.ttf (k32host copies it as
+SYSTEM\MARLETT.TT_), rasterized by a process-private host font
+(AddFontMemResourceEx) at the LOGFONT height into a FNT 3.0 FONTINFO, which the
+existing ExtTextOut/GetCharWidth read. Caption buttons draw (minimize, grey
+maximize, close): out/s26marlett.png. Put as WINDOWS\FONTS\*.TTF, GDI's own
+TrueType side takes another boot path and dies in VMM 0001:0009 - so not there.
+
+**"6"/"3" black.** ExtTextOut's trace now prints fg/bg. Calc's digits always
+reach ExtTextOut with fg 001F (blue); "*" "-" with F800. Yet some runs show
+them black/grey and others blue (s26t: blue at 30/39/50 s; s26colk: black).
+No later DISPLAY call overlaps those rects. Not found; suspect a write outside
+DISPLAY (or a present race). Still open.
+
+**W16_SHELL.** w16test writes `shell=%W16_SHELL%` (default calc.exe); k32host
+copies calc/notepad/winmine/sol to WINDOWS and cards.dll to SYSTEM (names as
+installed: unchanged in the INFs).
+
+**Solitaire** (`W16_SHELL=sol.exe`): boots and deals, out/s26sol_44.png. Fixes:
+- USER's GetCodeInfo probes SOL seg 10 through a not-present selector (KRNL386's
+  load-on-call/discarded mark, access byte 7B). KRNL386's exception 0Bh handler
+  (seg1 0B06) only does __GP recovery (9617 matches the faulting module's
+  __GP table), so raising #NP does not load anything. Now lifted memory accesses
+  go through vxd32 `recomp_sel_access_base`; for a not-present selector bound to
+  a lifted segment, identity.c `w16_np` gives that segment's bytes in the linked
+  image (placeholder SEL(n)). Bookkeeping lookups (`recomp_sel_base`) are
+  unchanged.
+- w16_drv_far and w16_jmpf read a selector's base to look for "PCRD": skipped
+  for not-present selectors.
+- SOL 4:1644 seed (callback stored as `mov ax,1644h; mov bx,[bp-6]; mov dx,seg`).
+A click on the stock (`click 80,120@40`) reaches USER's mouse proc but the
+shot shows no change (out/s26solclick_46.png); not looked at further.
+
+**Winmine** (`W16_SHELL=winmine.exe`): faults 1.5 s in, KRNL386 seg1 9002
+writing F000FF8B (an unread-yet selector?). Not looked at.
+
+**Notepad**: not run. Its image base is 0x400000, the same as xcopy32.mod
+(w16test's own EXE), and it has relocations, so kernel32's loader would move
+it off the lifted addresses. Needs a different host EXE base or relocated-image
+support in the lift.
+
+**Explorer** (task 4): not started.
+
+ponytail (this session):
+- Marlett only, chars 20h..7Fh, mono, host rasterizer on Win98's font file.
+- Not-present selector reads use the image's bytes; KRNL386 still thinks the
+  segment is unloaded. Writes there would go to the image.
+- W16_INPUT: Shift only, no Ctrl/Alt.
+
+**Regression.** check_w16, check_m1, check_calc pass (see commit).
+
+**Next.** (1) Sol's click: trace USER's queue (3:12EF) for the 0201 at 80,120
+and sol's wndproc. (2) Winmine's seg1 9002 fault: W16_TRACE around it.
+(3) Notepad: host EXE base. (4) Explorer. (5) The black digits.
