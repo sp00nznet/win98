@@ -2792,3 +2792,55 @@ folder window), task 5 (m1 flake: passed 2/2 here; calc keys 1/2; TDB+54).
 
 **Next.** (1) The Favorites highlight and gripper. (2) Start Menu\Programs\Accessories .lnk files
 in work/root (from Win98's setup INFs), then click through to notepad and sol.
+
+### Session 35: Start Menu shortcuts from setup's INFs; a generator flag bug classed every file "Directory" (handoff)
+
+pcrecomp w98 4823f4c (generator + runtime). Relift w16test with the README line (it now ends in
+`work\sys\shdoc401.dll`; without it the dispatch table drops shdoc401 and the build fails), then
+`py -3 tools/reginst.py w98\xcopy`, `py -3 tools/startmenu.py`, build.cmd.
+
+**Shortcuts (task 1).** `tools/startmenu.py` reads every INF's UpdateInis lines (`setup.ini,
+progman.groups` / `setup.ini, groupN`) as grpconv would and writes Win98-format .lnk files (ID list
+My Computer\C:\..., LinkInfo local path, working dir) into work/root\WINDOWS\Start Menu\Programs for
+targets present in work/root\WINDOWS: Accessories\Calculator, Accessories\Notepad (subase.inf),
+Accessories\Games\Minesweeper, Solitaire (appletpp.inf). The menu shows them with their own icons and
+names: out/s35_accessories.png (not committed).
+
+**Root cause of folder icons and ".lnk" names: the generator.** shell32's class-name function
+(7FCB4E80) is lifted inside a body that decoded strings as code, so `cmp eax,0x32` at 4EB4 reaches
+the `je` at 4EB7 through a gap goto. Gap landings were leaders but not join points, so the `je`
+kept the static flag kind of the overlapping `xor` decoded at 4EB6 and became TEST_Z(eax, 0x32):
+never taken, and every file pidl was class "Directory". generate.py now treats gap landings as
+join points (the jcc reads _flag_k at run time). All eight gates pass after the relift.
+
+**Host leaks closed.** regbox32: a box key marked whole now also hides the host's subkeys under it
+(the nearest existing box ancestor decides). reginst marks HKCU and HKLM ...\Explorer whole: the
+host's HideFileExt=0, its Win11 ShellState (234 MORE_DATA), MenuOrder\Favorites and
+MyComputer\NameSpace no longer read through. Folder Options' own defaults (HKLM ...\Advanced\Folder\*
+DefaultValue, the "Restore Defaults" values) are seeded: HideFileExt=1 etc. Note this also applies
+to HKLM\Software\Classes (whole since s33): host-only classes are now hidden too.
+
+**VMM 1E** (_GetDemandPageInfo, kernel32 GlobalMemoryStatus) answers a fixed 64 MB machine.
+**W98_REGTRACE=1** logs VMM registry opens, RegQueryValue and RegQueryValueEx with results.
+
+**Not done / where it stops.**
+- Clicking Notepad in Accessories: Explorer calls IContextMenu::QueryContextMenu (shell32 7FCC516B,
+  CDefFolderMenu) on an object whose vtable is already 0 by the time it reads [esi+18h]
+  (callback 0008D8A2, garbage): the object is freed during the call, i.e. a refcount over-release
+  (it is not the one CDefFolderMenu_Create2 made in that run: that one, callback 7FCC4930, is at
+  another address). Next: watch AddRef/Release (vtable +4/+8 of 7FCC4EE8) on that object from
+  shdoc401's merged Start Menu folder (77DB9571 -> explorer 0140892D -> 01408955).
+- Double-click My Computer: a guest exception reaches kernel32's UnhandledExceptionFilter, which
+  stops at the unknown VWIN32 service 37h (debugger notify). Next: answer 37h "no debugger" and
+  find the exception itself.
+- check_startprog.sh not written (needs the launch above). Tasks 3-5 not started.
+- johnny/civnet not relifted: they are NE lifts (ne_link), which do not use generate.py.
+
+ponytail (this session):
+- startmenu.py: C:\WINDOWS targets only; no icon/args/hotkey fields in the .lnk.
+- Folder Options seeding: checkbox entries with an HKCU root and a dword default only.
+- VMM _GetDemandPageInfo: fixed numbers (64 MB, half free, 128 MB swap), not the host's.
+- whole subtrees: any whole key now hides all host subkeys below it (Classes included).
+
+**Regression.** After the relift and runtime changes: check_m1, w16, calc, sol, winmine, notepad,
+explorer, run all pass.
