@@ -102,4 +102,7 @@ if __name__ == '__main__':
     # and calls far through [bp-16h]; ne_codemap's weak descent from there is rejected
     # (an overlap it reaches in seg 8), so it is a seed.
     res['SOL'] = {'4': ['0x1644']}
+    # WINMINE 1:03EE, its window procedure (RegisterClass gets it from a seg fixup and an
+    # immediate; no export, no call), the far call miss once its window is made.
+    res['WINMINE'] = {'1': ['0x3ee']}
     json.dump(res, sys.stdout)
