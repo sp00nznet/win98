@@ -2,18 +2,20 @@
 
 Stage 1 survey of the kernel boundary. `tools/survey.py work/sys/kernel32.dll` (and `--thunks`) reproduces it.
 
-## Status: done / what works / known gaps (as of Session 40, final)
+## Status: done / what works / known gaps (as of Session 41, final)
 
 **Done.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit; kernel32/user32/gdi32/advapi32/shell32/shdocvw/
 browseui/ole32/comctl32/Explorer and friends lifted 32-bit) boots on Windows 11 as one program: no emulator, no VM, no
 original code executed.
 
-**What works** (each has a gate in `tools/check_*.sh`; all 10 pass):
+**What works** (each has a gate in `tools/check_*.sh`; all 11 pass):
 - xcopy32 `/?` and a tree copy (check_m1); the 16-bit thunk round trip (check_w16).
 - Calculator, Solitaire, Minesweeper, Notepad as the shell (check_calc, sol, winmine, notepad).
 - Win98's Explorer as the shell: desktop icons, taskbar, clock, Start menu (check_explorer); Start > Run > calc
   (check_run); Start > Programs > Accessories > Notepad and Games > Solitaire, with taskbar buttons (check_startprog).
 - My Computer opens and paints ((C:), Printers, Control Panel); double-clicking (C:) lists the guest's C:\ (check_mycomp).
+- Windows close by their X (Notepad, calc, the My Computer folder), move by their caption, and minimize and
+  restore from the taskbar button; the desktop repaints where they were, icon labels whole (check_close).
 
 **How to run it.** Build per the README (lift, ne_link, build.cmd, `py -3 tools/reginst.py w98\xcopy`), then
 `set W16_WINDOW=1 & set W16_LIBMAIN=KERNEL & set W16_SHELL=Explorer.exe & build\w16test.exe --mute`.
@@ -29,16 +31,13 @@ Tests: `sh tools/check_<gate>.sh`, one at a time, on the hidden desktop (`HIDDEN
 - Muted, no devices: no sound, network, printing or real hardware. SetErrorMode in host and launcher; guest hard errors
   (kernel32's MessageBox) are logged, never shown.
 
-**Known gaps.**
-- Calculator keys 1, 9, 0, "." and "=" draw their labels black (Win98 has 1/9/0/. blue and = red); 2-8 are right.
-  Not traced (calc's own colour choice per key, or a stale text colour on its DC).
-- The Favorites submenu shows Links (k32host makes it); an empty folder's "(Empty)" item draws no text (its
-  string never reaches ExtTextOut; not traced). Channels/Media/Software Updates are made by IE setup code, not here.
+**Known gaps** (cosmetic or by design; nothing basic is missing).
+- The Favorites > Links "(Empty)" item draws no text. Traced as far as shell32's FileMenu item-text getter
+  (0x7FD21818: an item with flag 8 gets LoadStringA(shell32, 0x103B, "(Empty)")); no ExtTextOut with that string is
+  ever made. Whether the getter runs there, and what LoadStringA returns, is not followed.
 - IE's desktop icon is the generic one: Win98 registers no DefaultIcon for {871C5380} (shdocvw's REGINST
-  [RegShell] has none); the icon comes from shdocvw's folder code, which is not followed. A deep problem.
-- Closing or dragging a window by its caption: the press starts USER's tracking loop inside a callback, which
-  never gives up the machine, so W16_INPUT's release is never delivered. Desktop repaint after a window closes is
-  therefore unchecked (labels under an open window are occluded the way Win98 does it).
+  [RegShell] has none); the icon comes from shdocvw's folder code, which is not followed.
+- Channels/Media/Software Updates under Favorites are made by IE setup code, not here.
 - TDB+54 for a Win16 task whose load fails before CreateTask still reads 0. Not reproducible since winmine's
   SOUND import was answered (Session 27); which thread value goes there on real Win98 needs a real-Win98
   ordering check. Left as is.
@@ -3076,3 +3075,48 @@ ponytail (this session):
 - k32host's Favorites holds Links only.
 
 Regression: all 10 gates pass after each runtime change (work/s40gates_a.txt).
+
+### Session 41: windows close, move, minimize and restore (USER's modal loops hand the machine over); final
+
+pcrecomp w98 e74a4b0 (runtime only: identity.c, vxd32.c; no lifter/generator/disasm change, so no relift).
+
+**Close/move/minimize (tasks 1, 2): three bugs in a row.**
+1. *The loop that never let go.* A press on a caption button runs USER's tracking loop (USER seg 6 2F4B) inside
+   the app's window procedure: PeekMessage(WM_MOUSEFIRST..LAST, PM_REMOVE) until WM_LBUTTONUP. For a Win32 queue
+   with nothing in it USER's PeekMessage (seg 3 0D31) calls KERNEL.447 (KRNL386 1:805D), where Win98 lets the
+   Win16 lock go for a moment. Here the machine lock is that lock, and native32's back-edge yield only gives it up
+   at depth 1, so the poll held it for ever and the input thread could not post the release. Now every direct far
+   call to KERNEL.447 (identity.c w16_farcall) hands the machine over for 1 ms at any depth
+   (vxd32 native32_w9x_yield: w9x_wait without parking the thread). Move, size, minimize and menu loops poll the
+   same way.
+2. *calc spun at exit.* comctl32's DLL detach calls HeapDestroy on its HEAP_SHARED heap. kernel32 (0xBFF88D3C)
+   takes a heap below 7FFFFFFF as private and unlinks it from the process's heap list; it was in none, so the walk
+   ran off the end and read [0+48h] (emulated as 0) for ever. VMM PageReserve(PR_SHARED) now places the region in
+   the 80000000-BFFFFFFF shared arena, as Win9x does (the ponytail note there had foreseen it).
+3. *Explorer froze after Notepad closed.* Notepad's thread ended holding the Win16Mutex (crst 1E644, KRNL386
+   DGROUP:1344). vwin32_thread_done released it with the count backwards: kernel32 (0xBFF741CA) and KRNL386
+   (1:7D85) enter by decrementing (1 is free), so a release adds; it subtracted and woke no one, and every Explorer
+   thread then waited on an ownerless crst. Now +n, and a waiter is handed it while the count is <= 0.
+
+Gate `tools/check_close.sh` (three runs, about 2.5 min): Notepad (Start menu) closed by X; calc (Start > Run)
+closed by X; My Computer opened, dragged 200,200 by its caption, minimized, restored from its taskbar button and
+closed by X. After each close the window area is teal, the taskbar button is gone and the icon column holds 1051
+white pixels (the labels whole, as before anything opened). Explorer saves the folder's place in its box
+(Streams\N); the gate deletes those keys before and after, so check_mycomp keeps its default place.
+Screenshots: out/s41_notepad_closed.png, s41_calc_closed.png, s41_moved.png, s41_minimized.png,
+s41_folder_closed.png (never committed). No gate reference depends on the host's display size (the guest
+framebuffer is fixed); nothing was re-approved.
+
+**calc's "dark" labels (task 3): not a bug.** W16_TRACE shows calc's WM_DRAWITEM (0x01005A6F) takes each key's
+colour from its table at 0x01012E28 (digits 0xFF0000 = blue, operators red) and ExtTextOut draws 1, 9, 0, "." in
+fg 001F and "=" in F800, the same as 2-8. The pixels in the shot are (0,0,255) and (255,0,0)
+(work/s41_calc_zoom.png). The black look came from viewing a downscaled screenshot: thin glyphs blend dark.
+
+**"(Empty)" (task 4):** traced to shell32's FileMenu item-text getter (see Status); not fixed.
+
+ponytail (this session):
+- KERNEL.447 is found by its lifted symbol seg001_805D (a build without it links a no-op stub); the hand-over is
+  a fixed 1 ms.
+- PR_SHARED takes the first free 64 KB-aligned hole in 80000000-BFFFFFFF; PR_PRIVATE/PR_SYSTEM stay "anywhere".
+
+Regression: all 11 gates pass (work/s41gates_a.txt).
