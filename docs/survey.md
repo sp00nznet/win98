@@ -2268,3 +2268,82 @@ shot could pass on the last one).
 task: which stack does the 16->32 return land on). (2) The black digits
 after keys. (3) Sol's "Time: 0" (its timer never ticks; winmine's does).
 (4) Explorer.
+
+### Session 28: notepad as the shell (types text), timers fire (sol's clock), host selector pool (handoff)
+
+pcrecomp w98 414589d, 6f10482. Relink work/w16 with the README ne_link line
+(ne_lift changed: identity mode only), then build. The w16test lift is
+unchanged. johnny and civnet were relifted into s28-* scratch trees, in
+normal and identity mode, with f95c689 and 414589d. Normal mode: identical C
+and mem_image.bin. Identity mode: the same mem_image.bin, and the C differs
+only in the new `(far-call shape ...)` check lines.
+
+**Notepad (task 1).** The 16->32 return did not land on another task's
+stack. The 16-bit side came back with bp off. USER 1:101E (SetWindowText's
+16-bit side) calls 56E5 as `push cs; call near` (a far call into its own
+segment). 56E8 pushes 5702, jumps to 570F/5720, and 5720's `ret` goes to
+5702, whose `retf` returns to 101E. The lifted call took the C return as
+"back at 103E", skipped 5702's code, and popped cx/bp from the wrong slots:
+bp 89A0 went to kernel32 0xBFF7286D (`[bp-20h]`), which then got esp = sp
+on a stale ss. Fix (ne_lift, identity mode only): after `push cs; call
+near`, if ret_ip is not the call's return, run what the callee returned
+into (w16_retjump), as the existing ret-jump case does. A 16->32 stub's
+return now sets ret_ip to where it came back, because that check reads it
+(KRNL386 3:052F). W16_TRACE logs w16_enter's return state (ss/ds/di/bp in
+and out), which is how this was found. Notepad as the shell:
+out/s28np_hi.png ("Hi!" typed). Gate: `sh tools/check_notepad.sh`.
+
+**Calc's "6"/"3" (task 2).** They are blue (0,0,255) in the PNG pixels,
+the same as "5". The Read tool's downscaled preview makes thin blue glyphs
+look black. Nothing to fix. Check colours by pixel, not by eye.
+
+**Sol's clock (task 3).** USER's timer proc (USER seg1 1164) ran every tick
+but never found a timer due: its tick pointer (DGROUP:0, from VTDAPI 9) was
+0007:0000. KRNL386 chains every free LDT descriptor into its own free list
+(access 0, the next link in the limit), so the host's bump allocator found
+nothing free, wrapped and returned 0007 (entry 0) for *every* later host
+selector: drv16's tick dword and timer stack, TDBs from kernel32 thunk 32,
+rm_sel, the host selector, xss. Fix: vxd32 reserves LDT F800..FFF8 for the
+host (present, base 0) when the LDT alias is set up, before KRNL386 boots,
+and hands those out once the bump range is used up. Then sol's TimerProc
+came through a MakeProcInstance thunk (`mov ax, ds; jmp far`) in a KRNL386
+block: dispatch_far recognises it, without running it. Sol's clock runs
+(out/s28sol_clock.png, "Time: 15"), its deal is now seeded from the clock
+(it differs every run), and carets blink. check_sol now deals a card from
+the deck and checks that the clock changes between two shots; check_notepad
+compares the text only up to the caret.
+
+**Not fixed: the failed-load cleanup (task 3b).** KRNL386 seg1 9002
+reads TDB+54 (the task's thread) for a task whose LoadModule failed. On
+Win98 the thread exists from CreateTask on; here it is made at the task's
+first switch-in, so it is 0 there, and [0+38h] reads the real-mode vector.
+Next: set TDB+54 when the host makes the TDB (vxd32 krnl386 thunk 32, "new
+task"). Which thread value goes there is not looked at yet (no guess made).
+
+**Explorer (task 4): not started.** Plan: lift EXPLORER.EXE plus SHELL32,
+SHDOCVW, BROWSEUI, COMCTL32, OLE32, OLEAUT32, SHLWAPI and their imports
+from work/sys (Win98 names) into w16test. Rebase any that collide (as with
+notepad_1100). Use W16_SHELL=Explorer.exe. Before the first run, add guards:
+no host shell, tray, hotkey or AppBar calls (they resolve to lifted
+user32/shell32 only), and file views stay inside work/root (vxd32 already
+boxes paths).
+
+**hiddenrun.** taskkill /T /F timed out on a guest host that had stopped
+in a wait (WMI also hung on it). Every gated run left two w16test.exe
+processes, which kept work/root files open: check_m1 then failed with
+"no USER32 proxy", and check_w16 with rc=1. hiddenrun now calls
+TerminateProcess and then stops every process with the same exe path.
+
+ponytail (this session):
+- ne_lift: only `push cs; call near` gets the ret-jump check (the path
+  walk in _ret_jumps stops at calls, so it does not find these).
+- vxd32 host pool: 256 descriptors, never given back.
+- MakeProcInstance thunk: matched only as `B8 imm16 EA off sel`.
+
+**Regression.** check_m1, check_w16, check_calc, check_sol (new form),
+check_winmine and check_notepad pass.
+
+**Next.** (1) Explorer, from the plan above. (2) TDB+54 at task creation
+(the failed-load cleanup). (3) Notepad's scroll bars show navy
+(COLOR_SCROLLBAR? check by pixel). Keys 1 and 2 never repaint calc's
+buttons, while + 3 = do. Worth a look.

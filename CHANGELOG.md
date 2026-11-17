@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Milestone 2, session 28: Notepad runs as the shell and types text
+  (tools/check_notepad.sh). The fault was a far call made as `push cs; call
+  near` whose callee returned into an address it had pushed: the lifter now
+  checks for that case and runs the code the callee returned into. Timers
+  work: once KRNL386 had chained every free LDT descriptor, the host's later
+  selectors wrapped onto entry 0, so USER read the real-mode vector table as
+  its tick count. The host now keeps its own pool of 256 descriptors.
+  Solitaire's clock runs, its deal is seeded from the clock, and carets
+  blink. MakeProcInstance thunks are recognised. hiddenrun.py now ends the
+  processes it starts (taskkill /T timed out on them).
 - Milestone 2, session 27: Win16 tasks wake on input. A task switch back to
   the boot thread used to start a fresh guest thread instead of waking it, and
   KRNL386's idle (int 2Fh 1689h, VWIN32 10h/11h) was missing. Solitaire deals
