@@ -242,7 +242,9 @@ static int host_main(int argc, char** argv) {
             static const char* const m16[] = { "KRNL386.EXE", "GDI.EXE", "USER.EXE", "GDI32.DLL", "ADVAPI32.DLL", "DDEML.DLL", "MPR.DLL", "MSGSRV32.EXE",
                 /* MPR's WNetInitialize CreateProcesses MPREXE.EXE and waits for it to hand
                  * MPR its object (MPR ordinal 7); MPREXE loads MPRSERV, MPRSERV MSPWL32 */
-                "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL" };
+                "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL",
+                /* the shell (SYSTEM.INI shell=calc.exe, MSGSRV32 WinExecs it) and its DLLs */
+                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMMCTRL.DLL" };
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
@@ -251,6 +253,8 @@ static int host_main(int argc, char** argv) {
              * and calls InitSharedTable/InitUsrMprThunks. Over the proxy a plain xcopy run leaves. */
             _snprintf(src, MAX_PATH, "%s\\USER32.DLL", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", r);
             if (getenv("W16_LIBMAIN")) CopyFileA(src, p, FALSE);
+            _snprintf(src, MAX_PATH, "%s\\calc.exe", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\CALC.EXE", r);
+            CopyFileA(src, p, TRUE);
             {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */
                 WIN32_FIND_DATAA fd;
                 HANDLE f;
@@ -286,7 +290,7 @@ static int host_main(int argc, char** argv) {
          * bases are held from the host's start (native32_hold_image's relaunch),
          * or a host heap lands there first and the image is relocated where no
          * lifted code is (vxd32's PageReserve takes a held base as the image's). */
-        static const char* const later[] = { "mprexe.exe" };
+        static const char* const later[] = { "mprexe.exe", "calc.exe" };
         for (int i = 0; i < (int)(sizeof later / sizeof *later); i++) {
             char img[MAX_PATH];
             IMAGE_DOS_HEADER dh;

@@ -1757,3 +1757,71 @@ ponytail (this session):
 **Regression.** check_m1 (/?, /S /I copy, /P) and check_w16 pass after each
 change. There were no lifter or disasm changes, so I didn't relift
 johnny/civnet.
+
+### Session 22: the broadcast's wait was a stale CurTDB; MSGSRV32 WinExecs calc, which loads and exits in its process init (handoff)
+
+pcrecomp w98 5591521, 5ca1290; win98 this commit. Relift w16test (README
+line: + calc.exe msvcrt.dll shlwapi.dll comctl32.dll shell32.dll) and
+ne_link (+ commctrl.dll). No lifter/disasm change, so johnny/civnet were
+not relifted.
+
+**Root cause (task 1).** The window and queue were right: the broadcast's
+SendMessage went to MSGSRV32's own window (hq 117F). But USER's "current
+queue" (KRNL386 seg1 5B32, `[thread+30]`) gave the worker's queue (13CF).
+That happened because MPREXE's worker registered its queue into MSGSRV32's
+thread object. RegisterSystemThread (USER seg67 3098) calls SetThreadQueue(0, hq)
+(KRNL386 seg1 5C64), which finds "the current thread" through 5C21. 5C21
+takes kernel32's current thread only if its TDB (thread+14) is CurTDB
+(DGROUP:122C), and otherwise takes CurTDB's thread. CurTDB was only ever set by
+KRNL386's own task switches (VWIN32 01), so while the worker ran, CurTDB was
+still MSGSRV32's. SendMessage then saw curq != the window's queue, took the
+inter-thread path, and waited on the worker queue's event.
+Fix (vxd32 cur_task): whichever thread takes the machine (w9x_on_enter,
+the end of w9x_wait, guest_thread start) writes its thread+14 into CurTDB
+(identity records the address at the first VWIN32 01). With that, the
+broadcast completes at once, and USER's thread-exit path needs no change.
+ponytail: Win98's ring 0 does this when the Win16Mutex changes hands (from
+memory, not read); doing it at every hand-over of the machine is the same
+for 16-bit code.
+
+**Then, on the way to calc (task 2).**
+- VWIN32 16-bit 0F (KRNL386 seg1 750A: r0 thread, delta). USER's
+  SendMessage loop calls it -2/+2 on the receiver: a priority boost, so a no-op.
+- SHELL PM API 13h (USER seg55 5459, after reading the shift/ctrl/alt
+  states). Nothing reads a result, so a no-op.
+- int 21h 4B00 (Int21Dispatch): no DOS VM; answers 2 (missing) or 5.
+- **WinExec bypassed KRNL386's int 21h hook.** KRNL386 WinExec (seg2 2A68) does
+  a raw `int 21h` 4B00 and relies on its own handler (set with 2521h) to call
+  LoadModule. identity's dos_int21 now sends AH=4Bh to the guest's vector when
+  one is set, and runs the handler's ret-jump table (seg1 8624) in the
+  handler's segment. ponytail: only 4Bh takes the hook.
+- k32host copies CALC.EXE (into WINDOWS), MSVCRT, SHELL32, SHLWAPI,
+  COMCTL32 and COMMCTRL (16-bit; COMCTL32's init LoadLibrary16s it) into
+  the root, and holds calc's base (later[]).
+
+**Where it stops.** MSGSRV32's WinExec(calc) -> LoadModule -> kernel32
+CreateProcess: calc's process maps CALC, MSVCRT, SHLWAPI, COMCTL32 and SHELL32,
+and COMMCTRL loads and its LibEntry runs. Then calc's process exits during
+its init: kernel32's termination thread (BFF988D1, QueueToThread) and
+thread signal 7 run. That is a deliberate exit after COMMCTRL's LibEntry
+(14DF:009C), so the next thing to check is COMCTL32's DllMain/ThunkConnect32
+against COMMCTRL's ThunkConnect16 (compare USER<->MPR, session 14). **The
+dying thread still owns the Win16Mutex** (owner = its TDBX). Its teardown
+then runs 16-bit code with its freed fs (thunk 43 enters with fs base 0, low-memory
+reads), and MSGSRV32, the new thread and MPREXE all wait on crst 0001E644 for
+good. Two follow-ups: (a) why the process init fails; (b) a terminating
+thread should leave the Win16Mutex (or not reach 16-bit code on a freed fs).
+
+**Not reached:** calc's window and screenshot (task 2), scripted input /
+12+3= (task 3). VWIN32 14: nothing asked for it (task 4).
+**REG.DAT (task 5):** unchanged, Win98's own SHELL.DLL behaviour (it stays
+inside work/root).
+
+ponytail (this session):
+- CurTDB := thread+14 on every hand-over of the machine (vxd32 cur_task).
+- VWIN32 16-bit 0F (priority boost) and SHELL PM 13h are no-ops.
+- int 21h 4B00 from the host: 2 if the file is missing, else 5 (no DOS VM).
+- Only int 21h AH=4Bh goes to the guest's int 21h hook.
+
+**Regression.** check_m1 (/?, /S /I copy, /P) and check_w16 pass after
+each runtime change.
