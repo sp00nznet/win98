@@ -190,7 +190,12 @@ def main():
         time.sleep(0.2)
     th.join()
     print('exit', p.poll(), f'after {time.time() - t0:.1f}s')
-    subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True)
+    k32.TerminateProcess(p.h, 1)
+    # taskkill /T times out on a guest host stuck in a wait (and leaves its child,
+    # which holds work/root files the next run rewrites): also end every process of
+    # this exe path. ponytail: by path, so two runs of one exe can't overlap.
+    exe = os.path.abspath(cmd[0]).replace("'", "''")
+    subprocess.run(['powershell', '-NoProfile', '-c', f"Get-Process | ? {{ $_.Path -eq '{exe}' }} | Stop-Process -Force"], capture_output=True)
     k32.WaitForSingleObject(p.h, 10000)   # gone (its mapped files released) before the next run starts
     u32.CloseDesktop(desk)
 
