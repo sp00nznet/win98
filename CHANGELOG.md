@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Milestone 2, session 25: VTDAPI 9 now returns a real system-time selector
+  (USER's DGROUP:0 tick pointer; every event time was 0). SYSTEM.DRV timers
+  run from a host tick thread, and USER's static SYSTEM/KEYBOARD imports go to
+  the stand-ins. W16_INPUT clicks (move, then press, then release) and keys
+  reach calc: 12+3= shows 15. by mouse and by keyboard. check_m1's flake was
+  the shared USER32 proxy in work/root, which is now rewritten only when its
+  bytes change.
 - Milestone 2, session 23: calc's process init failed because the root had
   setup's own commctrl.dll and shell.dll; Win98 installs KOMMCTRL.DLL and
   SHELL.NEW under those names (COMCTL32's and SHELL32's ThunkConnect32

@@ -54,6 +54,8 @@ py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16
 py -3 tools\lift.py w16test work\sys\xcopy32.mod work\sys\kernel32.dll work\sys\gdi32.dll work\sys\advapi32.dll work\sys\user32.dll work\sys\mpr.dll work\sys\mprexe.exe work\sys\mprserv.dll work\sys\mspwl32.dll work\sys\calc.exe work\sys\msvcrt.dll work\sys\shlwapi.dll work\sys\comctl32.dll work\sys\shell32.dll
 sh tools/check_w16.sh
 set W16_LIBMAIN=KERNEL & build\w16test.exe --mute    (KRNL386 boots; W16_TRACE=1, W16_FN=2 for detail)
+set HIDDENRUN_DESKTOP=pcrecomp_w98 & set W16_WINDOW=1 & set W16_INPUT=key 1@40;key 2@41;key +@42;key 3@43;key =@44
+py -3 tools\hiddenrun.py --secs 52 --shot 50 --out out\calc -- build\w16test.exe --mute    (calc on Win98's own USER/GDI shows 15.; "click X,Y@T" clicks)
 ```
 
 The guest's C:\ is `work/root`. Its console is the host's stdout, and its

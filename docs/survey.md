@@ -2028,3 +2028,90 @@ Regression: check_w16 passes; check_m1 passes, but its first run after
 a check_w16 rebuild failed twice this session ("/? DIFFERS" or the /S /I
 copy missing) and passes on rerun: a reproducible ordering flake in the
 checks (likely the build or the root's state), not yet looked at.
+
+### Session 25: the tick source was VTDAPI 9; clicks and keys reach calc, 12+3= shows 15. (handoff)
+
+pcrecomp w98 faa87d3, 4db6b92; win98 5ecde94 and this commit. Relink work/w16
+(README ne_link line: drv16.c now defines SYSTEM_Ord1..6 and KEYBOARD_Ord1..7,
+131, 132, 134, 135, so the stub generator drops those) and rebuild. No lifter
+or disasm change, so johnny/civnet were not relifted.
+
+**Tick source (task 1).** USER seg72 1EC0..1EF8 (its init) calls int 2Fh
+1684h bx=442h (VTDAPI), then the entry with ax=9, and stores `0:ax` at
+DGROUP:0; KRNL386 seg1 6E95 does the same into DGROUP:1A88 (seg2 4D58 reads
+it). VTDAPI 9 returns the selector of VTD's system-time page (ms dword at
+offset 0). identity.c answered ax=0 (a ponytail since session 9), so
+USER's GetTickCount (1:110C, export 13) and every hardware event's time
+(0655, 0976) read 0000:0000. Now `drv16_tick_sel()` gives a selector over a
+host page that a host tick thread keeps at GetTickCount. The same thread runs
+SYSTEM.DRV timers: CreateSystemTimer(rate, proc) stores up to 8, and each due
+proc is called via w16_call holding the machine (mach_enter), on its own 8 KB
+16-bit stack, as the input thread does. USER creates two: 250 ms -> 1:12A8 and
+10000 ms -> 1:1164. USER's static SYSTEM and KEYBOARD imports now reach the
+stand-ins. The pop counts come from USER's call sites, not the generated
+stubs: KEYBOARD.1 Inquire pushes 4 (the stub had 8), .4 ToAscii 14 (18),
+.131 MapVirtualKey 4 (8). 128/129/133 stay generated, and nothing calls
+them in this run. KEYBOARD.Enable keeps the event proc (52:056C).
+
+**Clicks (task 2).** With real times, clicks still did nothing. The reason:
+USER's mouse proc queues the button messages (0841..086F) before it applies
+the move in the same call (0887..), so a press with the move bit set was
+queued at the old cursor (400,300, MSGSRV32's window). W16_ARGS on 3:3164
+showed 0201 at 0190,012C and 0200 at 007F,00FA. A real mouse moves before it
+clicks, so W16_INPUT now sends move (8001h), press (8002h), release (8004h).
+`W16_INPUT="click 127,250@40;click 166,250@42;click 244,284@44;click
+205,250@46;click 283,284@48"` (1 2 + 3 =) shows **15.**: out/s25click_15.png.
+
+**Keys.** `W16_INPUT="key 1@40;key 2@41;key +@42;key 3@43;key =@44"` calls
+KEYBOARD's event proc (al vk, ah 80h on release, bl scan). '+' is VK_ADD and
+the others go through VkKeyScan. USER's TranslateMessage calls KEYBOARD.4
+ToAscii, which uses the host's ToAscii with the guest's key state. Calc shows
+**15.**: out/s25key_15.png.
+
+**check_m1 flake (task 4).** Every host boot rewrites
+work/root/WINDOWS/SYSTEM/USER32.DLL (the host-user32 proxy). w16test and xcopy
+write different bytes (their stand-in addresses differ), so while one process
+still has it mapped, the other's fopen("wb") fails. That produced "no USER32
+proxy", rc 1, "/? DIFFERS", or a missing copy. With a w16test running in the
+background, 20 of 20 xcopy runs failed. Fixes: write_proxy_dll leaves the file
+alone when its bytes are already there, hiddenrun waits for the killed process
+to end, and check_m1 keeps each run's log (work/m1_help/copy/p.txt). After the
+fix: 15 of 15 runs next to a running w16test, and 5 of 5 loops of hiddenrun,
+check_w16, check_m1. Residual: one check_m1 right after a w16test relink
+lost the /P run's "copied" line once. Not reproduced in 3 tries; the next one
+leaves its log in work/m1_p.txt. The proxy can still clash if a w16test and
+an xcopy run at the same moment with different bytes; use separate roots per
+host if that matters.
+
+**Tracing added.** `W16_ARGS=fn,fn` prints 8 stack words at entry to the named
+lifted 16-bit functions. `W16_BP=fn@-70` prints 16 words at ss:bp-70h there.
+Both are on from the first W16_INPUT event, and W16_FN_INPUT gives the full
+FN trace from then. W16_TRACE now prints the Pascal arguments of 32->16 enters
+and 16->32 stubs. Useful USER entries: 3:12EF DISPATCHINPUT (drains the raw
+queue into 3:3164, per message), 3:0284 DISPATCHMESSAGE32 (its MSG at
+ss:sp+6), 3:018F GETMESSAGE32, 4:1562 (queue events, type at +1Ch).
+
+**Not done (task 3).** Marlett: GDI realizes only raster fonts here
+(dpNumFonts 0, the stand-in ExtTextOut draws .FNT glyphs). The caption
+buttons ask for Marlett, the mapper falls back to a raster face, and the
+glyph codes show as "0 1 r". A fix needs GDI's TrueType path (Win98's
+marlett.ttf rasterized somewhere) or a stand-in that draws the four caption
+glyphs when the face is Marlett. Not started. "6"/"3" colour: not looked at.
+The ExtTextOut trace does not print the text colour yet.
+
+ponytail (this session):
+- Tick thread: one host thread, Sleep(5)-paced (host GetTickCount
+  granularity ~15 ms), at most 8 system timers; the time is the host's
+  GetTickCount, not ms since the guest's boot.
+- KEYBOARD.ToAscii/MapVirtualKey use the host's layout (US here) in place of
+  KEYBOARD.DRV's tables.
+- W16_INPUT keys: unshifted only ('+' '-' '*' '/' as numpad keys).
+- write_proxy_dll skips identical bytes; two hosts with different proxies
+  running at once still clash.
+
+**Regression.** check_w16 and check_m1 pass after each runtime change.
+
+**Next.** (1) Marlett for the caption buttons. (2) Why "6" and "3" are black:
+log the DRAWMODE text colour in ExtTextOut and compare with the
+SetTextColor calls calc makes for those buttons. (3) Shifted keys in
+W16_INPUT. (4) Watch work/m1_p.txt for the residual check_m1 flake.
