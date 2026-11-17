@@ -1988,3 +1988,43 @@ ponytail (this session):
 **Regression.** check_w16 and check_m1 pass after each runtime change (one
 check_m1 run right after a rebuild missed the /S /I copy; three reruns
 passed: a build race, not reproduced).
+
+### Session 24, part 2: the mouse proc runs; moves reach calc, button messages do not (handoff)
+
+pcrecomp w98 1554a36. No relink needed beyond part 1's.
+
+**Why part 1's events did nothing.** w16_call took `cs >> 3` as the
+segment index; USER's event proc lives at a run-time selector (099F),
+whose index is past RECOMP_NUM_SEG, so the dispatch lookup failed and
+w16_call returned 0 without running anything. w16_call now uses seg_of
+(identity selectors map to themselves, as before), and the input thread
+reports a proc that is not lifted.
+
+**Now.** USER 1:07FE runs for every event: [0FD0]=0, [66h]=[68h]=1, the
+9ECh decode gives 0201h/0202h (left down/up) plus 0200h (move); the
+position is right ([76h],[78h] = 127,250 in a 0,0,800,600 rect); each is
+stored by 0655 into the system queue and KERNEL.451 (VWIN32 07) sets host
+event 3E0h/3E4h. USER's input thread (VWIN32 06 wait on that event) wakes
+each time and calc's thread wakes too: calc's button gets WM_NCHITTEST
+(84h, lp 00FA007F) and WM_SETCURSOR (20h, HTCLIENT, 200h) and so does its
+parent. **No WM_LBUTTONDOWN/UP is delivered**, so nothing is pressed and
+the display stays "0." (out/s24in_70.png).
+
+Lead: every hardware event's time is 0. 0655/0976 take it from `les si,
+ds:[0]` in USER's DGROUP (seg 84), which is 0000:0000 here, so es:[si]
+reads 0. Something (KRNL386 or USER init, probably from SYSTEM's
+GetSystemMSecCount pointer or a timer USER's SYSTEM.2 CreateSystemTimer
+callback updates) should store a far pointer to a running tick count
+there. With all times 0 the button messages are likely dropped or merged
+by the reader's time/double-click checks. Next: find the writer of USER
+DGROUP:0000 (grep the lifted USER segs for stores to ds:0 / the KERNEL
+export that returns a tick pointer), then put SYSTEM (and KEYBOARD, with
+the pop counts checked against Win98's KEYBOARD.DRV exports: the
+generated KEYBOARD.1 pops 8, drv16's Inquire 4) on the stand-ins.
+
+Not reached this part: 12+3=, Marlett caption glyphs, the "6"/"3" colour.
+
+Regression: check_w16 passes; check_m1 passes, but its first run after
+a check_w16 rebuild failed twice this session ("/? DIFFERS" or the /S /I
+copy missing) and passes on rerun: a reproducible ordering flake in the
+checks (likely the build or the root's state), not yet looked at.
