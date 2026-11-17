@@ -6,6 +6,7 @@
 cd "$(dirname "$0")/.." || exit 1
 export PCRECOMP_MUTE=1 HIDDENRUN_DESKTOP=pcrecomp_w98 W16_WINDOW=1 W16_LIBMAIN=KERNEL
 export W16_INPUT='key 1@40;key 2@41;key +@42;key 3@43;key =@44'
+rm -f work/calc_gate_*.png
 py -3 tools/hiddenrun.py --secs 52 --shot 50 --out work/calc_gate -- 'build\w16test.exe' --mute > /dev/null 2>&1
 py -3 - <<'P'
 import os, sys

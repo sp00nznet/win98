@@ -5,6 +5,7 @@
 cd "$(dirname "$0")/.." || exit 1
 export PCRECOMP_MUTE=1 HIDDENRUN_DESKTOP=pcrecomp_w98 W16_WINDOW=1 W16_LIBMAIN=KERNEL W16_SHELL=sol.exe
 export W16_INPUT='drag 570,209,324,119@40'
+rm -f work/sol_gate_*.png
 py -3 tools/hiddenrun.py --secs 50 --shot 49 --out work/sol_gate -- 'build\w16test.exe' --mute > /dev/null 2>&1
 py -3 - <<'P'
 import os, sys

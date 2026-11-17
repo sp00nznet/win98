@@ -253,7 +253,7 @@ static int host_main(int argc, char** argv) {
                  * MPR its object (MPR ordinal 7); MPREXE loads MPRSERV, MPRSERV MSPWL32 */
                 "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL",
                 /* the shell (SYSTEM.INI shell=calc.exe, MSGSRV32 WinExecs it) and its DLLs */
-                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL" };
+                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMDLG32.DLL" };   /* + notepad's */
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
@@ -269,12 +269,15 @@ static int host_main(int argc, char** argv) {
             /* and SHELL.NEW as SHELL.DLL (shell.inf), SHELL32's partner (Shl3216_ThunkData16) */
             _snprintf(src, MAX_PATH, "%s\\shell.new", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\SHELL.DLL", r);
             CopyFileA(src, p, FALSE);
-            {   /* the accessories a W16_SHELL may name, under their installed names (accessor.inf, games.inf) */
-                static const char *const prog[][2] = { { "calc.exe", "WINDOWS\\CALC.EXE" }, { "notepad.exe", "WINDOWS\\NOTEPAD.EXE" },
+            {   /* the accessories a W16_SHELL may name, under their installed names (accessor.inf, games.inf);
+                 * notepad as rebased off 0x400000 (xcopy32.mod, this host's own EXE, is there):
+                 * tools/rebase.py work/sys work/rebased notepad.exe=0x01100000, then renamed
+                 * notepad_1100.exe so its catalog is not the 0x400000 one) */
+                static const char *const prog[][2] = { { "calc.exe", "WINDOWS\\CALC.EXE" }, { "..\\rebased\\notepad_1100.exe", "WINDOWS\\NOTEPAD.EXE" },
                     { "winmine.exe", "WINDOWS\\WINMINE.EXE" }, { "sol.exe", "WINDOWS\\SOL.EXE" }, { "cards.dll", "WINDOWS\\SYSTEM\\CARDS.DLL" } };
                 for (int i = 0; i < (int)(sizeof prog / sizeof *prog); i++) {
                     _snprintf(src, MAX_PATH, "%s\\%s", dir, prog[i][0]); _snprintf(p, MAX_PATH, "%s\\%s", r, prog[i][1]);
-                    CopyFileA(src, p, TRUE);
+                    CopyFileA(src, p, FALSE);
                 }
             }
             {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */
@@ -316,7 +319,7 @@ static int host_main(int argc, char** argv) {
          * bases are held from the host's start (native32_hold_image's relaunch),
          * or a host heap lands there first and the image is relocated where no
          * lifted code is (vxd32's PageReserve takes a held base as the image's). */
-        static const char* const later[] = { "mprexe.exe", "calc.exe" };
+        static const char* const later[] = { "mprexe.exe", "calc.exe", "..\\rebased\\notepad_1100.exe" };
         for (int i = 0; i < (int)(sizeof later / sizeof *later); i++) {
             char img[MAX_PATH];
             IMAGE_DOS_HEADER dh;

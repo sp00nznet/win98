@@ -6,6 +6,7 @@
 cd "$(dirname "$0")/.." || exit 1
 export PCRECOMP_MUTE=1 HIDDENRUN_DESKTOP=pcrecomp_w98 W16_WINDOW=1 W16_LIBMAIN=KERNEL W16_SHELL=winmine.exe
 export W16_INPUT='click 146,171@40'
+rm -f work/winmine_gate_*.png
 py -3 tools/hiddenrun.py --secs 47 --shot 39 --shot 46 --out work/winmine_gate -- 'build\w16test.exe' --mute > /dev/null 2>&1
 py -3 - <<'P'
 import sys
