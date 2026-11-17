@@ -2844,3 +2844,57 @@ ponytail (this session):
 
 **Regression.** After the relift and runtime changes: check_m1, w16, calc, sol, winmine, notepad,
 explorer, run all pass.
+
+### Session 36: the Start menu launches programs (a lifter bug, not a refcount); My Computer gets three steps further (handoff)
+
+pcrecomp w98 2786fc6 (lifter) + the runtime commit below. Relift w16test with the README line, and
+rebuild work/w16 with the README lines (`NE_IDENTITY_SEL=1`, w16_seeds.py, ne_link): w16_seeds.py
+has new USER seeds.
+
+**generate.py regression check (task 1).** afterlife and crazytaxi relifted into scratch trees
+(afterlife/s36-{old,new}-gen, crazytaxi/s36-{old,new}-gen, `--all` for crazytaxi) with generate.py
+from 63b8e80 and from 4823f4c: the generated C is byte-identical in both games (0 lines differ), so
+nothing was rebuilt or run. The scratch trees were deleted. The s36 lifter change below only
+affects LIFT32_W9X lifts.
+
+**Root cause of the Notepad crash: the lifter, not an over-release.** CDefFolderMenu's
+QueryContextMenu (7FCC516B) calls 7FCC5F20, which calls the folder's GetUIObjectOf (7FCBCFC0) for
+IDataObject. That path ends `push [ebp+20h]; push 7FCBCE60; push 7FCB4DC0; jmp 7FCBD0E6`: a jump
+back into its own body with arguments pushed. LIFT32_W9X's "push <function>; ...; jmp <function> is a
+call returning to the pushed function" rule (made for user32's relay BFF53955) fired because the
+GUID addresses are catalogue "functions" (shell32's data sits in .text): the lift tail-called D0E6
+and then "returned" into the GUID bytes as code, which left esp 14h high, so 5F20's `pop esi`
+restored garbage and QueryContextMenu used a non-object (vtable 0, callback 0008D8A2). The rule now
+applies only to a jump that leaves the body (generate.py hands the lifter the body's addresses);
+77 such sites in the w16test lift became plain gotos (x86 semantics; `ret` handles a pushed return
+address), 25 remain (user32's relay among them). Refcounts were fine throughout (1 at QCM entry).
+
+**What runs.** Start > Programs > Accessories > Notepad opens Notepad with a taskbar button
+(out/s36_start_notepad.png); Accessories > Games > Solitaire deals (out/s36_start_sol.png).
+`tools/check_startprog.sh` is the gate. Once in four runs, the Solitaire launch stopped with a far
+call miss into 0A2F:1C63 (a return point, `pop ds; pop edi; ...`); not reproduced since.
+
+**My Computer (task 3), three steps.**
+- VWIN32 37h (debugger notify, 3 args) answers 0: no debugger.
+- That exposed the real stop: kernel32's 16-bit thunk (0xBFF7240B) checks esp against the TIB's
+  StackLimit and ExitProcesses (37h, then ExitProcess(-1)) when it is below. Win9x lowers StackLimit
+  as the stack grows by guard pages; our reserved-page fault handler (vxd32 resv_fault) now lowers
+  the guest TIB's StackLimit when it commits a page under it (within 1 MB). The folder window's
+  thread was 8 KB below its limit.
+- VWIN32 4Dh(8): ExitThread/ExitProcess end with it instead of 2B when the thread object's +44 has
+  30000000h. Taken as 2B (ponytail).
+- browseui 7F334D00 (a window procedure) seeded in work/seeds/browseui.dll.json; USER 14:0000 and
+  14:0009 (entry stubs USER's dispatch 54:9E87 calls far) seeded in tools/w16_seeds.py.
+- **Where it stops now:** GDI (global seg 41 = GDI seg 37) seg041_0388 reads `ds:[esi+esi]`, a
+  bad lds pointer (80A7809E), called far from seg029_08EE. 41:0388 looks like a mis-decoded entry
+  (data as code): check GDI 37:034C/0388 in the code map and the far call that reaches it
+  (W16_TRACE=1 around the double-click; slow, give it 100+ s). No window appears yet (out of
+  work/s36mc_30.png: My Computer selected, nothing opened).
+
+ponytail (this session):
+- VWIN32 37h: argument meanings read off the two call sites.
+- VWIN32 4Dh taken as 2B; its argument (8) not read.
+- resv_fault: StackLimit follows a committed page only within 1 MB below it.
+
+Not done: C: drive window, task 4 (taskbar buttons already show for Notepad/Solitaire; gripper,
+Favorites, IE icon, calc keys, TDB+54).

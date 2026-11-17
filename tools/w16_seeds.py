@@ -105,4 +105,7 @@ if __name__ == '__main__':
     # WINMINE 1:03EE, its window procedure (RegisterClass gets it from a seg fixup and an
     # immediate; no export, no call), the far call miss once its window is made.
     res['WINMINE'] = {'1': ['0x3ee']}
+    # USER 14:0000 and 14:0009, `pop eax; push 0; push eax; jmp` entry stubs at the segment's
+    # start that USER's window-proc dispatch (54:9E87) calls far: My Computer's folder window.
+    res['USER'].setdefault('14', []).extend(['0x0', '0x9'])
     json.dump(res, sys.stdout)
