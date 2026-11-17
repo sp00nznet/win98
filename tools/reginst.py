@@ -171,6 +171,33 @@ def main():
                 except OSError: break
         for s in subs: whole(path + '\\' + s)
     whole(r'Software\pcrecomp\%s\HKLM\Software\Classes' % box)
+    # Explorer's keys too, subtree and all (regbox32: a whole key's missing subkeys do not read
+    # through): the host's HideFileExt=0, its Win11 ShellState and MenuOrder\Favorites, and its
+    # MyComputer\NameSpace are not Win98's. Missing values mean shell32's own defaults.
+    for hive in ('HKCU', 'HKLM'):
+        winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\pcrecomp\%s\%s\%s' % (box, hive, xp)).Close()
+    # Folder Options' own defaults (HKLM ...\Explorer\Advanced\Folder\*: RegPath, ValueName,
+    # DefaultValue), as the dialog's "Restore Defaults" writes them: HideFileExt=1 and the rest.
+    # ponytail: only checkbox entries with an HKCU root and a dword default.
+    adv = r'Software\pcrecomp\%s\HKLM\%s\Advanced\Folder' % (box, xp)
+    def opts(path):
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as h:
+            subs, i = [], 0
+            while True:
+                try: subs.append(winreg.EnumKey(h, i)); i += 1
+                except OSError: break
+            try:
+                if winreg.QueryValueEx(h, 'HKeyRoot')[0] == 0x80000001:
+                    rp, vn, dv = (winreg.QueryValueEx(h, n)[0] for n in ('RegPath', 'ValueName', 'DefaultValue'))
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\pcrecomp\%s\HKCU\%s' % (box, rp)) as k:
+                        try: winreg.QueryValueEx(k, vn)
+                        except OSError: winreg.SetValueEx(k, vn, 0, winreg.REG_DWORD, dv)
+            except (OSError, TypeError): pass
+        for s in subs: opts(path + '\\' + s)
+    try: opts(adv)
+    except OSError: pass
+    for hive in ('HKCU', 'HKLM'):
+        whole(r'Software\pcrecomp\%s\%s\%s' % (box, hive, xp))
     # The startup lists are the box's own, empty: else the open falls through to the host's
     # (read-only), and Explorer starts the host's Run entries (rundll32 ..., "Cannot find").
     for hive in ('HKLM', 'HKCU'):
