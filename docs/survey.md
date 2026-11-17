@@ -2632,3 +2632,68 @@ selector 15FF's descriptor writes (GlobalAlloc/Free of the thread's 16-bit
 stack) and which thread is in w16_retf when the stub returns without its retf.
 (2) Explorer paint, check_explorer.sh, Start menu, Start -> Run -> calc.
 (3) calc keys 1/2, TDB+54.
+
+### Session 32: the killed thread's relay stack; SHDOC401 is the desktop; Explorer's desktop and taskbar paint (handoff)
+
+pcrecomp w98 82b9999 (killed threads park) and f50eabb (16-bit
+crst 0A/0B, rebase.py timestamps). Relift w16test with the README line + `work\sys\shdoc401.dll`
+(after `tools/vtseeds.py work/sys/shdoc401.dll > work/seeds/shdoc401.dll.json`), re-rebase
+ole32 (rebase.py now gives a moved module a new TimeDateStamp: copy the new
+work/rebased/ole32.dll over; only that dword changes), re-run `tools/reginst.py w98\xcopy`, build.cmd.
+No lifter, generator or disasm change: johnny/civnet not relifted.
+
+**Root cause of the BFF71903 relay fault (task 1).** Not a race on per-thread
+state. `W98_LDTW=15FF` (new in k32host.c: the LDT page read-only, every write
+that changes that descriptor logged with thread and C stack) showed selector 15FF
+allocated by KRNL386, set by kernel32 BFF71E03 as the second thread's 16-bit stack
+alias (base = its flat stack), then written by BFF71D26 -- kernel32's selector
+cache free -- from `run_termination` inside `w9x_wait` **on that same thread**.
+Explorer's main thread called ExitProcess (see below), VWIN32 B queued the other
+threads' termination, and the killed thread ran its teardown at its next wait,
+then *returned* into its window-proc relay, on a stack selector that was now a
+cache entry `{next, 1}` (read as a descriptor: base 000161xx, session 31's
+"0001618C"). Fix (vxd32 w9x_wait): after a queued termination's teardown the
+thread parks as in 2B (`vwin32_thread_done`). All three crash variants (the retf
+stop, `cmp [ebx+14h]`, the 8E12 base-0 read) went away (9 runs clean; 7 of 7 failed before).
+
+**Why Explorer exited.** SHDOCVW 119 SHCreateDesktop forwards to SHDOC401.DLL 200
+while SHELL32's DllGetVersion major is below 5 (Win98 SE's is 4.72). SHDOC401
+was not in work/root, so SHCreateDesktop returned 0 and WinMain returned. Now
+SHDOC401 is lifted (a part DLL) and copied in by k32host. Its IAT is bound to
+ole32 at ole32's linked base (0x7FF4F578, called as native and faulted, as it
+should); rebase.py now changes a moved module's timestamp so the binding is stale
+and kernel32's loader snaps it.
+
+**Then.** The desktop showed "This PC": My Computer's CLSID has no default value
+in Win98's INFs and the box read through to the host's. reginst.py marks every
+key under the box's Classes `pcrecomp:whole`. Now "My Computer". And a boot-time
+stop "VxD entry called 002A:0A44": KRNL386's 16-bit crst contention (seg1
+7F43/7D85 call VWIN32 PM 0A to wait, 7E08 0B to wake; ebx = the crst's linear
+address, same layout as kernel32's) -- mapped to VWIN32 1D/1E (identity.c).
+
+**What runs.** Explorer as the shell paints the desktop (My Computer, Internet
+Explorer, Recycle Bin, labels) and the taskbar (Start, clock). Gate:
+`tools/check_explorer.sh` (reference out/s32ex_desktop.png, a run's own shot,
+not committed). Icons are white silhouettes (colour bits missing: image list /
+DIBENG). The rebar's gripper strips show the desktop's teal (unpainted).
+
+**Start menu (task 3).** A real click (`W16_INPUT=click 29,587@30`) presses the
+Start button, no menu: Explorer's tray thread has been blocked since start-up in
+kernel32 BFF9420D (called from the 16->32 dispatcher through the relay, from USER
+seg054 SendMessage, from explorer 01406C8E) -> WaitForSingleObject; shell32's
+thread 7FCB8A1A sits in BFF93EA7 -> WaitMultiple the same way. Both are
+kernel32-internal helpers near UTUnRegister: find what they wait for (likely an
+inter-thread SendMessage reply or a 16-bit event that never fires). Start -> Run
+-> calc not reached. Task 4 not done.
+
+ponytail (this session):
+- Killed thread: parks after the teardown (never unwinds; host thread stays).
+- 16-bit crst 0A/0B: kernel32's 1D/1E hand-over, owner = the waiter's TDBX.
+- reginst whole: only under Classes; other keys still read through for values Win98 did not write.
+- rebase.py: timestamp + 1 for a moved module (a binder to a moved module that kept its stamp would still be wrong).
+
+**Regression.** check_m1, check_w16, check_calc, check_sol, check_winmine, check_notepad, check_explorer pass (m1 failed once while a w16test run held work/root USER32.DLL; alone it passes).
+
+**Next.** (1) The tray thread's wait in BFF9420D (and shell32's in BFF93EA7):
+Start menu, Start -> Run -> calc. (2) Icon colours (image list masks vs colour
+bits), rebar grippers. (3) calc keys 1/2, TDB+54.

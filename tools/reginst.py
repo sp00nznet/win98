@@ -144,6 +144,19 @@ def main():
     for k in (r'Control Panel\Colors', r'Control Panel\Desktop', r'Control Panel\Desktop\WindowMetrics'):
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\pcrecomp\%s\HKCU\%s' % (box, k)) as h:
             winreg.SetValueEx(h, 'pcrecomp:whole', 0, winreg.REG_DWORD, 1)
+    # Every class key Win98's INFs wrote is the guest's whole too: a value they leave out
+    # (My Computer's CLSID has no default, shell32 then uses its own "My Computer") must not
+    # come from the host's (Windows 11's "This PC"). ponytail: Classes only; other keys still
+    # read through to the host for values Win98 did not write.
+    def whole(path):
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as h:
+            winreg.SetValueEx(h, 'pcrecomp:whole', 0, winreg.REG_DWORD, 1)
+            subs, i = [], 0
+            while True:
+                try: subs.append(winreg.EnumKey(h, i)); i += 1
+                except OSError: break
+        for s in subs: whole(path + '\\' + s)
+    whole(r'Software\pcrecomp\%s\HKLM\Software\Classes' % box)
     # The startup lists are the box's own, empty: else the open falls through to the host's
     # (read-only), and Explorer starts the host's Run entries (rundll32 ..., "Cannot find").
     for hive in ('HKLM', 'HKCU'):

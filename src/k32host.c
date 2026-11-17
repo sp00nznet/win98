@@ -86,7 +86,7 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
             SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)(uintptr_t)r->ExceptionAddress, &disp, &ln))
             fprintf(stderr, "  at %s:%lu\n", ln.FileName, ln.LineNumber);
         /* the callers: which lifted 16-bit block the inlined accessor was in */
-        dump_stack(GetCurrentThread(), *ep->ContextRecord, 8);
+        dump_stack(GetCurrentThread(), *ep->ContextRecord, getenv("W98_DEPTH") ? atoi(getenv("W98_DEPTH")) : 8);
     }
     native32_dump_icalls(12);
     fprintf(stderr, "  9CE0=%08X 9CE8=%08X 9D10=%08X 9CEC=%08X\n", MEM32(0xBFFC9CE0u), MEM32(0xBFFC9CE8u), MEM32(0xBFFC9D10u), MEM32(0xBFFC9CECu));
@@ -94,6 +94,44 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     fflush(stderr);
     TerminateProcess(GetCurrentProcess(), 3);
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* W98_LDTW=sel: every write that changes sel's descriptor, with the writing
+ * thread and its C stack (the LDT page is read-only; a write steps once). Debug only. */
+static uint8_t* g_ldtw; static uint8_t* g_ldtw_pg; static uint32_t g_ldtw_last[2];
+static __declspec(thread) int t_ldtw_step;
+static LONG CALLBACK ldtw(EXCEPTION_POINTERS* ep) {
+    EXCEPTION_RECORD* r = ep->ExceptionRecord; DWORD o;
+    if (r->ExceptionCode == 0xC0000005u && r->ExceptionInformation[0] == 1
+        && (uint8_t*)r->ExceptionInformation[1] - g_ldtw_pg < 0x1000u) {
+        VirtualProtect(g_ldtw_pg, 0x1000, PAGE_READWRITE, &o);
+        ep->ContextRecord->EFlags |= 0x100; t_ldtw_step = 1;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (r->ExceptionCode == 0x80000004u && t_ldtw_step) {
+        t_ldtw_step = 0;
+        uint32_t* d = (uint32_t*)g_ldtw;
+        if (d[0] != g_ldtw_last[0] || d[1] != g_ldtw_last[1]) {
+            g_ldtw_last[0] = d[0]; g_ldtw_last[1] = d[1];
+            fprintf(stderr, "LDTW %08X %08X thread %lu in sub_%08X\n", d[0], d[1], GetCurrentThreadId(), g_cur_func);
+            SymSetOptions(SYMOPT_LOAD_LINES); static int si; if (!si) si = SymInitialize(GetCurrentProcess(), NULL, TRUE);
+            dump_stack(GetCurrentThread(), *ep->ContextRecord, 10);
+            fflush(stderr);
+        }
+        VirtualProtect(g_ldtw_pg, 0x1000, PAGE_READONLY, &o);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+void k32host_ldtw_arm(void) {
+    const char* e = getenv("W98_LDTW"); DWORD o;
+    if (!e || g_ldtw) return;
+    uint8_t* native32_w9x_desc(uint16_t sel);
+    g_ldtw = native32_w9x_desc((uint16_t)strtoul(e, NULL, 16));
+    g_ldtw_pg = (uint8_t*)((uintptr_t)g_ldtw & ~(uintptr_t)0xFFF);
+    memcpy(g_ldtw_last, g_ldtw, 8);
+    AddVectoredExceptionHandler(1, ldtw);
+    VirtualProtect(g_ldtw_pg, 0x1000, PAGE_READONLY, &o);
 }
 
 static HANDLE g_main_th;
@@ -261,6 +299,7 @@ static int host_main(int argc, char** argv) {
                 /* the shell (SYSTEM.INI shell=calc.exe, MSGSRV32 WinExecs it) and its DLLs */
                 "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMDLG32.DLL",   /* + notepad's */
                 "SHDOCVW.DLL", "BROWSEUI.DLL",   /* + Explorer's integrated shell (ieshell.inf) */
+                "SHDOC401.DLL",   /* the desktop: SHDOCVW 119 SHCreateDesktop goes to its 200 while SHELL32 is below 5.0 */
                 "..\\rebased\\OLE32.DLL" };   /* rebased to 0x7F400000: its own base runs into 0x7FFE0000 (the host's shared user page) */
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 const char* bn = strrchr(m16[i], '\\') ? strrchr(m16[i], '\\') + 1 : m16[i];
@@ -360,6 +399,7 @@ static int host_main(int argc, char** argv) {
     }
     native32_init();
     AddVectoredExceptionHandler(0, crash);
+    k32host_ldtw_arm();
     if (!native32_modules_map(dir, dir, g_mods, NMODS)) return 1;
     int missing = native32_modules_bind(NULL, 0);
     if (missing) fprintf(stderr, "warning: %d imports unresolved\n", missing);
