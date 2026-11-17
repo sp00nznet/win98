@@ -284,6 +284,10 @@ static int host_main(int argc, char** argv) {
                     } while (FindNextFileA(f, &fd));
                     FindClose(f);
                 }
+                /* and Marlett, which the display stand-in rasterizes for USER's caption glyphs; not
+                 * as FONTS\*.TTF, where GDI's own TrueType side finds it (and calls VMM 0001:0009) */
+                _snprintf(src, MAX_PATH, "%s\\marlett.ttf", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\MARLETT.TT_", r);
+                CopyFileA(src, p, TRUE);
             }
         }
 #endif
