@@ -20,6 +20,8 @@ copy (extracted CAB files, catalogs, lifted C) goes into the gitignored
 Screenshots show the guest's own screen, drawn by Win98's USER/GDI through
 pcrecomp's display driver stand-in.
 
+How it works: [docs/architecture.md](docs/architecture.md).
+
 ## Status
 
 **Done.** Win98 SE boots its own Explorer desktop here, with no emulator and no original code executed: the Start menu, Run, Notepad, Calculator, Solitaire and Minesweeper work, and My Computer opens and lists C: (work/root). Ten gates (`tools/check_{m1,w16,calc,sol,winmine,notepad,explorer,run,startprog,mycomp}.sh`) pass. Safety model: guest memory is never executable, the registry is boxed (whole keys never read the host), files stay in work/root, no host shell, muted, no devices. Known gaps (disabled toolbar images, grippers, Favorites, IE icon, calc keys 1/2, Win16 TDB+54) and how to run it are at the top of docs/survey.md.
@@ -82,3 +84,7 @@ py -3 tools\hiddenrun.py --secs 52 --shot 50 --out out\calc -- build\w16test.exe
 
 The guest's C:\ is `work/root`. Its console is the host's stdout, and its
 hard errors (kernel32's USER32!MessageBoxA) are logged, never shown.
+
+## License
+
+MIT (LICENSE). Windows 98 is Microsoft's; bring your own copy.
