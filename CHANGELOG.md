@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Session 39 (final): work/root held folders named `%USERPROFILE%`, `%PUBLIC%`, `%ProgramData%` and `Users\...\OneDrive` from the host's Shell Folders values. They were created in Sessions 29-32, before Session 33 boxed those keys whole. A traced run confirms that no host Shell Folders or ProfileList value reaches the guest now. The folders were removed, and k32host builds C:\ the way Win98 does (WINDOWS, My Documents, Program Files). The status write-up in docs/survey.md and the README is finished.
+- Summary to date: Win98's own KRNL386/USER/GDI (16-bit) and kernel32/user32/gdi32/shell32/Explorer (32-bit), all lifted, run Explorer as the shell with the Start menu, Run, Notepad, Calculator, Solitaire, Minesweeper, My Computer and C:. Ten gates pass.
 - Session 38: My Computer paints (C:, Printers, Control Panel) and double-clicking C: lists work/root. USER's 16-bit thunk entries reach their function by a `retf` to a pushed pointer, which the runtime took as a return, so GetWindowPlacement never ran and the folder frame was sized from stack garbage (pcrecomp: retf above a far call's return is a far jump). Int 21h 7303 (FAT32 free space) answered. check_mycomp now checks the painted window and the C: listing.
 - Session 37: GDI's 32-bit (use32) code segments are now decoded as 32-bit code (pcrecomp edb2030), which fixes the crash when My Computer is double-clicked. The folder window opens with a taskbar button but does not paint yet. Added tools/check_mycomp.sh and a status summary at the top of docs/survey.md.
 - Session 30: the host is now a small exe plus one DLL per lifted module

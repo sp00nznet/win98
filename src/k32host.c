@@ -278,12 +278,13 @@ static int host_main(int argc, char** argv) {
     {   /* The guest's C:\ (vxd32 boxes every path under it): a Windows 98
          * layout with the two modules this program is made of. Built from
          * your work/sys on first run; nothing outside it is touched. */
-        static const char* const dirs[] = { "", "\\WINDOWS", "\\WINDOWS\\SYSTEM", "\\WINDOWS\\COMMAND", "\\WINDOWS\\TEMP" };
+        static const char* const dirs[] = { "", "\\WINDOWS", "\\WINDOWS\\SYSTEM", "\\WINDOWS\\COMMAND", "\\WINDOWS\\TEMP",
+            "\\My Documents", "\\Program Files" };   /* what Win98 setup makes at C:\ (and nothing host-shaped: survey s39) */
         char r[MAX_PATH], p[MAX_PATH], src[MAX_PATH];
         GetFullPathNameA(root, MAX_PATH, r, NULL);
         SetEnvironmentVariableA("NATIVE32_W9X_ROOT", r);
         strcpy(g_root_host, r);
-        for (int i = 0; i < 5; i++) { _snprintf(p, MAX_PATH, "%s%s", r, dirs[i]); p[MAX_PATH - 1] = 0; CreateDirectoryA(p, NULL); }
+        for (int i = 0; i < (int)(sizeof dirs / sizeof *dirs); i++) { _snprintf(p, MAX_PATH, "%s%s", r, dirs[i]); p[MAX_PATH - 1] = 0; CreateDirectoryA(p, NULL); }
         _snprintf(src, MAX_PATH, "%s\\kernel32.dll", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\KERNEL32.DLL", r);
         CopyFileA(src, p, TRUE);
         _snprintf(src, MAX_PATH, "%s\\%s", dir, APP_EXE); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\COMMAND\\%s", r, APP_EXE);

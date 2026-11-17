@@ -2,24 +2,40 @@
 
 Stage 1 survey of the kernel boundary. `tools/survey.py work/sys/kernel32.dll` (and `--thunks`) reproduces it.
 
-## Status: done / what works / known gaps (as of Session 38)
+## Status: done / what works / known gaps (as of Session 39, final)
 
-**Done enough to use.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit, kernel32/user32/gdi32/shell32/
-Explorer and friends lifted 32-bit) boots on Windows 11 as one program, no emulator or VM, all in `work/root`.
+**Done.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit; kernel32/user32/gdi32/advapi32/shell32/shdocvw/
+browseui/ole32/comctl32/Explorer and friends lifted 32-bit) boots on Windows 11 as one program: no emulator, no VM, no
+original code executed.
 
 **What works** (each has a gate in `tools/check_*.sh`; all 10 pass):
 - xcopy32 `/?` and a tree copy (check_m1); the 16-bit thunk round trip (check_w16).
 - Calculator, Solitaire, Minesweeper, Notepad as the shell (check_calc, sol, winmine, notepad).
-- Win98's Explorer as the shell: desktop icons, taskbar, clock, Start menu (check_explorer);
-  Start > Run > calc (check_run); Start > Programs > Accessories > Notepad and Games > Solitaire,
-  with taskbar buttons (check_startprog).
-- Double-clicking My Computer opens and paints its folder window ((C:), Printers, Control Panel), and double-clicking
-  (C:) lists work/root in it (check_mycomp).
+- Win98's Explorer as the shell: desktop icons, taskbar, clock, Start menu (check_explorer); Start > Run > calc
+  (check_run); Start > Programs > Accessories > Notepad and Games > Solitaire, with taskbar buttons (check_startprog).
+- My Computer opens and paints ((C:), Printers, Control Panel); double-clicking (C:) lists the guest's C:\ (check_mycomp).
+
+**How to run it.** Build per the README (lift, ne_link, build.cmd, `py -3 tools/reginst.py w98\xcopy`), then
+`set W16_WINDOW=1 & set W16_LIBMAIN=KERNEL & set W16_SHELL=Explorer.exe & build\w16test.exe --mute`.
+Tests: `sh tools/check_<gate>.sh`, one at a time, on the hidden desktop (`HIDDENRUN_DESKTOP=pcrecomp_w98`).
+
+**Safety model.**
+- Guest memory is never executable: every instruction that runs is lifted C; original bytes are only data.
+- Registry: pcrecomp regbox32, `HKCU\Software\pcrecomp\w98\<app>`, filled from Win98's own INFs (reginst.py). Keys
+  Win98 owns (appearance, cursors, Shell Folders, User Shell Folders, RunMRU, Explorer, Classes) are whole: the host's
+  values and subkeys never read through. Setters write only to the box. `W98_REGTRACE=1` logs opens, creates and values.
+- Files: every guest path is boxed under work/root (vxd32); k32host builds it Win98-shaped (WINDOWS, My Documents,
+  Program Files). No host shell, tray, taskbar, hotkeys or COM/CPL DLLs; MPR is lifted and local; fonts are private.
+- Muted, no devices: no sound, network, printing or real hardware. SetErrorMode in host and launcher; guest hard errors
+  (kernel32's MessageBox) are logged, never shown.
 
 **Known gaps.**
-- The folder window's Back button draws magenta; the desktop icons' labels under the window are clipped after it opens.
-- Explorer's toolbar gripper, Favorites, Internet Explorer's icon, calc keys 1/2 (dark), TDB+54 (Session 36 list).
-- Intermittent far-call miss at 0A2F:1C63 (seen once in Session 36; not in 5 runs in Session 37).
+- The folder window's Back button draws magenta and Forward a grey block (both disabled: comctl32's disabled-image
+  path, probably colour-to-mono in the DIBENG stand-in; not traced). Rebar grippers and band backgrounds stay teal.
+- Desktop icon labels under the folder window stay clipped; the Favorites submenu is empty; IE's desktop icon is the
+  generic one (icon handler not followed); calc keys 1/2 draw dark.
+- TDB+54 for Win16 tasks is set inside CreateTask, so a Win16 load that fails before that still reads 0.
+- Intermittent far-call miss at 0A2F:1C63: seen once (Session 36); 0 in 5 (s37) and 0 in 8 (s39) runs since.
 - No sound, network, printing or real devices, by design.
 
 ## Load addresses
@@ -2989,3 +3005,35 @@ ponytail (this session):
 Regression: all 10 gates pass (m1 w16 calc sol winmine notepad explorer run startprog mycomp).
 
 Not done: gripper, Favorites, IE icon, calc keys 1/2, TDB+54, the far-call miss (task 2). Next: those, then the Back button colour.
+
+### Session 39: the host-shaped folders in work/root were a pre-Session-33 leak, now closed; final status (handoff)
+
+pcrecomp w98 b8ad0ef (vxd32: W98_REGTRACE also logs RegCreateKey; trace only). No lifter, generator or disasm change,
+so no relift (task 5's relift rule did not trigger).
+
+**The leak (task 1).** work/root held `%USERPROFILE%` (AppData\Roaming\Microsoft\Windows\{Recent,Start Menu\Programs\Startup},
+Favorites), `%PUBLIC%\Desktop`, `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Startup` and
+`Users\nedch\OneDrive\Desktop`. These are exactly the host's values: HKCU `...\Explorer\User Shell Folders` (REG_EXPAND_SZ
+`%USERPROFILE%\...`), HKLM User Shell Folders (`Common Startup` = `%ProgramData%\...`, `Common Desktop` = `%PUBLIC%\Desktop`)
+and HKCU Shell Folders `Desktop` = the host's OneDrive Desktop. Win98's shell32 does not expand environment strings in
+these, so it created them literally under the boxed C:\. Timestamps: Users 11-16 23:30, `%USERPROFILE%`/`%PUBLIC%`
+23:36 (Session 29's first Explorer runs, before 2c58958 at 00:05), `%ProgramData%` 11-17 02:10 (between Sessions 31
+and 32). Session 33 (5ad868c, 03:17) made those four keys whole in the box; nothing host-shaped was created after.
+
+**Closed now.** shell32 opens Shell Folders with RegCreateKey, which W98_REGTRACE did not log; it does now. A My
+Computer + C: run with W98_REGTRACE=1 (work/s39reg.log): every `User Shell Folders` value read (Desktop, Personal,
+Programs, Start Menu, Startup, ...) returns 2 (not found), Shell Folders reads give the box's own Win98 paths
+(C:\WINDOWS\Desktop, C:\WINDOWS\All Users\Desktop, ...), and ProfileList is never opened. The w98 box keys hold only
+Win98 paths. (The w2k project's winhlp32/wordpad boxes do hold host OneDrive paths: not this project's, reported only.)
+
+**Clean root.** The four folders were deleted; k32host now also creates `My Documents` and `Program Files` (what
+Win98 setup makes at C:\). work/root is APPLOG, My Documents, Program Files, TEST, WINDOWS; C: lists exactly that
+(work/s39reg_45.png).
+
+**Task 2.** startprog 8 more runs: 8/8 pass, no far-call miss and no fault in any log. Not reproduced since Session 36. **Task 3** (Back button, labels, gripper, Favorites, IE icon,
+calc 1/2, TDB+54): not worked this session; carried in the Status section's known gaps with what is known.
+
+ponytail (this session):
+- k32host's root dirs: My Documents and Program Files only (no Recycled, no WINDOWS\Profiles).
+
+Regression: all 10 gates pass after the k32host change (work/s39gates_a.txt).
