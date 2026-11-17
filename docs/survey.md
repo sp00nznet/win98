@@ -1912,3 +1912,79 @@ ponytail (this session):
 civnet relifted into s23-* scratch trees, normal and identity mode, with
 5ca1290 and with this session's pcrecomp: identical C and mem_image.bin in
 all four (civnet without work/win16_imports.json, the same for both sides).
+
+### Session 24: the 0F49 fault was two 16->32 stubs merged by their return address; calc's window paints (handoff)
+
+pcrecomp w98 4797218, 0a6a480; win98 this commit. Relink work/w16 (README
+line; w16_seeds.py changed, regenerate work/seeds/w16.json; drv16.c now
+defines MOUSE_Ord1..3, so the stub generator drops those). No lifter or
+disasm change, so johnny/civnet were not relifted.
+
+**Root cause (task 1).** Not sp: 3D12's frame balances (`add sp,8` drops
+the thunk's two pushed dwords, `retf 0Ch` the 12 argument bytes when
+[esi+2Fh] bit 0 is set; traced 9E2D in = 9E9D out on every call). Calc's
+window procedure sends a message to its own window (WM_NCACTIVATE, 86h),
+so USER 30:3D12 runs nested: the outer one on ss 1427, the inner on 1477,
+and both call KRNL386 3:2726 from 3D12, so both 16->32 stubs have the
+same far return (0457:2737). w16_enter's "outermost of a run with the
+same return" rule (meant for a flat thunk re-entering itself through
+KRNL386 to connect) merged them and longjmp'd the inner return to the
+outer stub's C frame. The inner 3DA6 then returned up the outer C chain,
+skipped 9E9D (ds, esi, edi and 14 bytes left on the stack), and 8A9B read
+its window pointer from [bp+0Ah] of the inner frame on the outer ss.
+Fix (identity.c): each stub records the 16-bit ss:sp of its return;
+stubs merge only when that frame is the same. W16_TRACE says when stubs
+share a return but not a frame.
+
+**Task 2.** The 3D12 seed is gone. KRNL386 2:7616 indexes a table that
+USER registers with KERNEL.619 (RegisterCBClient(id 3, relay16 30:3CAA,
+relay32)): 16:16 entries up to FFFFh, each selector word on seg 30's
+selector fixup chain. w16_seeds.py finds every KERNEL.619 call, the
+`push sel; push off` before it, and seeds the table's offsets (USER
+30:3D12 and 30:3E13; GDI 47:01DA's table is empty).
+
+**Task 3: calc's window and first paint.** `W16_WINDOW=1`, PrintWindow on
+hiddenrun's desktop (`HIDDENRUN_DESKTOP=pcrecomp_w98`, new in
+hiddenrun.py), shot at 30 s and 95 s (the same): out/s24calc_95.png. Win98's
+calc, drawn by Win98's own USER/GDI/DISPLAY into the framebuffer at
+60,83 (260x257): caption, Edit/View/Help menu, display "0.", all 28
+buttons with their labels, red/blue as in shots/calc_12p3_5.png (the
+host-DLL calc). By region: same layout and labels; differences: (a) the
+caption buttons show "0 1 r" (USER draws them as Marlett glyphs; the
+DISPLAY stand-in's ExtTextOut has no Marlett), (b) "6" and "3" are black,
+not blue, (c) the 9x frame/3D style vs Win11 (expected). The display
+reads 0. (no input landed, task 4). After the paint every thread waits
+(calc in GetMessage): the watchdog's dump.
+
+**Task 4: scripted input (plumbed, no effect yet).** USER imports MOUSE
+statically, so its calls took the generated "unimplemented" stubs
+(MOUSE.Inquire returned 0). drv16 now defines MOUSE_Ord1..3 (the stub
+generator skips hand-written names), ms_enable keeps USER's event proc
+(1:07FE), and `W16_INPUT="click X,Y@T;..."` starts a host thread that takes
+the machine (mach_enter) per event and calls the proc as MOUSE.DRV's
+interrupt handler would (ax 8003h/8005h absolute+move+down/up, bx/cx
+scaled to FFFFh, dx 2) on a private 8 KB 16-bit stack. All ten events of
+12+3= reach 1:07FE and return, but calc does not change and nothing is
+traced in between (no far calls): USER's proc takes its early-out.
+Next: 1:07FE tests [0FD0] (then ss:[sp+0Ah] against cs:[568h], an
+interrupt-stack check?), [66h]/[68h] (mouse/cursor enabled), and the 9ECh
+result; one of them drops to 9DDh. Read those words at the first event
+(W16_TRACE + a peek at DGROUP 7C8h) and see who sets them (likely
+USER's EnableHardwareInput / the cursor init that MOUSE.Inquire now
+answers differently, or a SYSTEM timer that drains the queue: SYSTEM.2
+CreateSystemTimer is still an unimplemented stub returning 0).
+
+**Task 5.** COMMDLG and VER did not come up (calc does not load them);
+the INF renames are noted in session 23.
+
+ponytail (this session):
+- 16->32 stubs merge only on the same 16-bit return frame (ss:sp equal).
+- W16_INPUT: clicks only, a host thread holding the machine stands in for
+  the mouse interrupt, its own 8 KB 16-bit stack.
+- MOUSE only: USER's static KEYBOARD and SYSTEM imports still go to the
+  generated stubs (KEYBOARD.1 purge 8 there vs Inquire's 4 in drv16:
+  check before switching them).
+
+**Regression.** check_w16 and check_m1 pass after each runtime change (one
+check_m1 run right after a rebuild missed the /S /I copy; three reruns
+passed: a build race, not reproduced).

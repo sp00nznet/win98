@@ -56,6 +56,31 @@ def seeds(path):
                     n += 1
                 o = struct.unpack_from('<H', d, o)[0]
         print(f'FT seg {sg}:{start:04X}: {n} targets', file=sys.stderr)
+    # KERNEL.619 RegisterCBClient(id, relay16, relay32): relay16 is a table of
+    # 16:16 entries (to FFFFh) that KRNL386's run-time thunks (2:7616, the
+    # 16-bit face of a 32-bit window procedure) jump through, by index
+    # (USER: `push 3; push seg30; push 3CAAh; push dword; call KERNEL.619`).
+    # The pushed selector word sits on a selector fixup chain of its segment.
+    kern = 1 + [m.upper() for m in ne.module_names].index('KERNEL') if 'KERNEL' in [m.upper() for m in ne.module_names] else 0
+    for seg in ne.segments:
+        d, chain = seg.data, {}
+        for r in seg.relocations or []:
+            if r.src_type == 2 and not r.flags & 3 and r.target_seg:
+                o = r.offset
+                while o != 0xFFFF and o + 2 <= len(d) and o not in chain:
+                    chain[o] = r.target_seg
+                    o = struct.unpack_from('<H', d, o)[0]
+        for r in seg.relocations or []:
+            if r.flags & 3 != 1 or r.module_idx != kern or r.ordinal != 619:
+                continue
+            for p in range(r.offset - 1 - 6, max(r.offset - 24, 0), -1):   # `push sel; push off` before it
+                if d[p] == 0x68 and d[p + 3] == 0x68 and p + 1 in chain:
+                    tseg, t = chain[p + 1], struct.unpack_from('<H', d, p + 4)[0]
+                    td = ne.segments[tseg - 1].data
+                    while t + 2 <= len(td) and struct.unpack_from('<H', td, t)[0] != 0xFFFF:
+                        out.setdefault(str(tseg), []).append(hex(struct.unpack_from('<H', td, t)[0])); t += 4
+                    print(f'RegisterCBClient relay16 {tseg}:{struct.unpack_from("<H", d, p + 4)[0]:04X}: {out.get(str(tseg), [])[-2:]}', file=sys.stderr)
+                    break
     return ne.module_name, out
 
 
@@ -73,8 +98,4 @@ if __name__ == '__main__':
     # GDI 11:2B73 `call cs:[si+2CADh]`: three near stubs (`jmp far` to imports)
     # its init steps through, counted by the words at 2C96h (1, 6, 4, 0).
     res['GDI'].setdefault('11', []).extend(['0x2c9e', '0x2ca3', '0x2ca8'])
-    # USER 30:3D12: the 32-bit window procedure's 16-bit entry. A KERNEL-owned
-    # run-time thunk (`push proc32; push 3; jmp far` KRNL386 2:7616) reaches
-    # it through the table at KRNL386 4:2214 (filled at run time).
-    res['USER'].setdefault('30', []).append('0x3d12')
     json.dump(res, sys.stdout)
