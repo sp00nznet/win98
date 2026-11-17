@@ -2,7 +2,7 @@
 
 Stage 1 survey of the kernel boundary. `tools/survey.py work/sys/kernel32.dll` (and `--thunks`) reproduces it.
 
-## Status: done / what works / known gaps (as of Session 39, final)
+## Status: done / what works / known gaps (as of Session 40, final)
 
 **Done.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit; kernel32/user32/gdi32/advapi32/shell32/shdocvw/
 browseui/ole32/comctl32/Explorer and friends lifted 32-bit) boots on Windows 11 as one program: no emulator, no VM, no
@@ -30,11 +30,18 @@ Tests: `sh tools/check_<gate>.sh`, one at a time, on the hidden desktop (`HIDDEN
   (kernel32's MessageBox) are logged, never shown.
 
 **Known gaps.**
-- The folder window's Back button draws magenta and Forward a grey block (both disabled: comctl32's disabled-image
-  path, probably colour-to-mono in the DIBENG stand-in; not traced). Rebar grippers and band backgrounds stay teal.
-- Desktop icon labels under the folder window stay clipped; the Favorites submenu is empty; IE's desktop icon is the
-  generic one (icon handler not followed); calc keys 1/2 draw dark.
-- TDB+54 for Win16 tasks is set inside CreateTask, so a Win16 load that fails before that still reads 0.
+- Calculator keys 1, 9, 0, "." and "=" draw their labels black (Win98 has 1/9/0/. blue and = red); 2-8 are right.
+  Not traced (calc's own colour choice per key, or a stale text colour on its DC).
+- The Favorites submenu shows Links (k32host makes it); an empty folder's "(Empty)" item draws no text (its
+  string never reaches ExtTextOut; not traced). Channels/Media/Software Updates are made by IE setup code, not here.
+- IE's desktop icon is the generic one: Win98 registers no DefaultIcon for {871C5380} (shdocvw's REGINST
+  [RegShell] has none); the icon comes from shdocvw's folder code, which is not followed. A deep problem.
+- Closing or dragging a window by its caption: the press starts USER's tracking loop inside a callback, which
+  never gives up the machine, so W16_INPUT's release is never delivered. Desktop repaint after a window closes is
+  therefore unchecked (labels under an open window are occluded the way Win98 does it).
+- TDB+54 for a Win16 task whose load fails before CreateTask still reads 0. Not reproducible since winmine's
+  SOUND import was answered (Session 27); which thread value goes there on real Win98 needs a real-Win98
+  ordering check. Left as is.
 - Intermittent far-call miss at 0A2F:1C63: seen once (Session 36); 0 in 5 (s37) and 0 in 8 (s39) runs since.
 - No sound, network, printing or real devices, by design.
 
@@ -3037,3 +3044,35 @@ ponytail (this session):
 - k32host's root dirs: My Documents and Program Files only (no Recycled, no WINDOWS\Profiles).
 
 Regression: all 10 gates pass after the k32host change (work/s39gates_a.txt).
+
+### Session 40: the display stand-in's empty-string ExtTextOut and DIB-section mono blits (final polish)
+
+pcrecomp w98 718f116 (drv16 only: runtime, no lifter/generator/disasm change, so no relift).
+
+**Rebar teal, grippers, Quick Launch band (task 2).** comctl32 fills rectangles with PatB: SetBkColor then
+ExtTextOut(ETO_OPAQUE) with an empty string. drv16's ExtTextOut drew only when count > 0, so every such fill was
+dropped and the rebar showed whatever was under it (the desktop's teal). count 0 now fills the opaque rect.
+Pixel check (out/s40_mycomp_c.png): rebar area 34..432 x 76..132 has 0 teal (0,130,132) pixels (was 461 in the
+Back button box alone); the taskbar band 68..160 x 608..630 is (198,195,198) grey. Side effect: the Start menu's
+accelerator underlines now draw (they are the same fill); check_run's start-menu reference was re-approved
+(out/s34_startmenu.png, old one kept as s34_startmenu_pre_s40.png) because the new image is more correct.
+
+**Back magenta, Forward grey block (task 1).** BitBlt converted colour->mono (background colour -> 1) only for a
+16-bpp source, and mono->colour only into 16 bpp. comctl32's image lists here are DIB sections (15/24/32 bpp or
+palettized), so a masked add or a disabled emboss got no conversion: the mask was empty (magenta drawn) and the
+emboss mono was all 0 (a solid shadow block). Now any colour surface converts. Pixel check: 0 magenta pixels in
+the toolbar; Forward (disabled) is the grey+white emboss (132,130,132)x89, (255,255,255)x20; Back is enabled
+after C: was opened from My Computer and draws its cold image (black outline), as Win98 does.
+
+**Favorites (task 4).** work/root's Favorites was empty; the submenu showed a blank item. k32host now also makes
+WINDOWS\Favorites\Links (browseui's LinksFolderName default). Pixel check: 185 black text pixels in the
+submenu (out/s40_favorites.png). The blank "(Empty)" item for an empty folder is still a gap.
+
+**Desktop labels (task 3).** With the rebar fixed, labels left of the folder window draw and the window occludes
+the rest (no more text bleeding over the frame). Repaint after a close is unchecked: see the Status gap on caption
+tracking. **IE icon (5), calc 1/2 (6), TDB+54 (7):** not fixable in the time box; what is known is in the Status gaps.
+
+ponytail (this session):
+- k32host's Favorites holds Links only.
+
+Regression: all 10 gates pass after each runtime change (work/s40gates_a.txt).

@@ -279,7 +279,9 @@ static int host_main(int argc, char** argv) {
          * layout with the two modules this program is made of. Built from
          * your work/sys on first run; nothing outside it is touched. */
         static const char* const dirs[] = { "", "\\WINDOWS", "\\WINDOWS\\SYSTEM", "\\WINDOWS\\COMMAND", "\\WINDOWS\\TEMP",
-            "\\My Documents", "\\Program Files" };   /* what Win98 setup makes at C:\ (and nothing host-shaped: survey s39) */
+            "\\My Documents", "\\Program Files", "\\WINDOWS\\Favorites", "\\WINDOWS\\Favorites\\Links" };
+            /* what Win98 setup makes at C:\ (and nothing host-shaped: survey s39). ponytail: Favorites holds
+             * Links only (browseui's LinksFolderName default), not IE setup's Channels/Media/Software Updates */
         char r[MAX_PATH], p[MAX_PATH], src[MAX_PATH];
         GetFullPathNameA(root, MAX_PATH, r, NULL);
         SetEnvironmentVariableA("NATIVE32_W9X_ROOT", r);
