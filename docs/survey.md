@@ -2747,3 +2747,48 @@ colour, task 4 (m1 flake not seen: 1 run, passed), task 5.
 
 **Next.** (1) Image-list colour bits (desktop, Start menu icons). (2) Gripper. (3) The
 Favorites submenu highlight. (4) calc keys 1/2, TDB+54.
+
+### Session 34: white icons were three DIBENG stand-in bugs; colour desktop and Start menu icons (handoff)
+
+pcrecomp w98 3af4d1c (runtime only; no lifter, generator or disasm change, so johnny/civnet
+were not relifted). Rebuild: build.cmd.
+
+**Root cause (task 1).** Image-list colour bits never reached the screen, for three reasons in drv16's DIBENG:
+1. **The bits.** CreateDIBPDevice allocated its own bits when lpBits was 0 and put them at deBits+0
+   (16h). GDI's CreateDIBSection (seg007_0216 -> 0709) allocates the real bits itself and writes a
+   selector for them at 1Ah. Shell32's system image list is a shared section, re-created in each
+   context (a 128x544 4 bpp DIB per draw). So each copy drew into private, all-black memory. Now
+   deBits+0 is lpBits' offset (0), and surf_of reads GDI's selector.
+2. **The size.** dpDEVICEsize was 20h, and GDI uses it as the size of every DIB section's PDEVICE
+   too. GDI keeps its own 1Ch-byte record straight after the PDEVICE, so a DIBENGINE (30h) overlapped
+   that record, and deBitmapInfo (20h) was overwritten. CreateCompatibleBitmap on a DIB-section
+   DC (seg010_0DB3) clones deBitmapInfo, and it was cloning garbage: biBitCount 0. PDEV_SIZE is now
+   40h. deBitmapInfo points at a host copy of the BITMAPINFO (one selector per PDEVICE slot).
+   CreateDIBPDevice now returns the image size, which GDI stores as biSizeImage.
+3. **The read-back.** ImageList_Draw copies the image cell into a temporary DIB, reads it with
+   GetDIBits at 4 bpp, then SetDIBits it into a screen DDB. DeviceBitmapBits get wrote only 1 and
+   24 bpp. It now writes 4/8 bpp (the surface's own indices and colour table when the depth matches,
+   otherwise the nearest entry), plus 16 (5-5-5) and 32 bpp.
+
+Checked by pixel values: the My Computer and Recycle Bin cells hold VGA colours (132,130,132),
+(198,195,198), (0,130,0) and (0,0,255), not white. Shots (not committed): out/s34_desktop_icons.png,
+out/s34_startmenu.png (Start menu items now have their icons), out/s34ex_desktop.png.
+Debug: W16_DUMPSRC=WxH [W16_DUMPSCR=1] writes BitBlt source surfaces to work/s34dump/dNNN.ppm.
+
+**Regression.** check_m1, w16, calc, sol, winmine and notepad pass. explorer and run differed
+because their old references showed the white icons. The references were rebased to the s34
+shots, and both gates pass against them.
+
+ponytail (this session):
+- deBitmapInfo copies: 256 PDEVICE slots, one selector each, never freed. No SetDIBColorTable.
+- A 4/8 bpp get from a surface of another depth uses the nearest entry of the bi's table as given
+  (GDI is assumed to have filled it).
+- The Internet Explorer desktop icon shows the generic document-with-flag icon, not IE's "e"
+  (icon handler not followed).
+
+**Not done.** Task 2 (gripper, Favorites submenu and its highlight), task 3 (Programs ->
+Accessories from the profile's Start Menu and launching notepad/sol by click), task 4 (My Computer
+folder window), task 5 (m1 flake: passed 2/2 here; calc keys 1/2; TDB+54).
+
+**Next.** (1) The Favorites highlight and gripper. (2) Start Menu\Programs\Accessories .lnk files
+in work/root (from Win98's setup INFs), then click through to notepad and sol.
