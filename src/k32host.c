@@ -72,6 +72,11 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
             r->NumberParameters > 1 ? (unsigned long)r->ExceptionInformation[1] : 0ul, g_cur_func, g_cur_import);
     fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X ebp=%08X esi=%08X edi=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi);
+    if (r->ExceptionCode == 0xC0000005u && !IsBadReadPtr(r->ExceptionAddress, 48)) {   /* guest bytes reached as code (data, a run-time stub): shown, never run */
+        fprintf(stderr, "  bytes:");
+        for (int i = 0; i < 48; i++) fprintf(stderr, " %02X", ((const uint8_t*)r->ExceptionAddress)[i]);
+        fprintf(stderr, "\n");
+    }
     {   /* the lifted C line: the register globals are stale for a body's locals */
         IMAGEHLP_LINE64 ln = { sizeof ln };
         DWORD disp = 0;
@@ -253,10 +258,13 @@ static int host_main(int argc, char** argv) {
                  * MPR its object (MPR ordinal 7); MPREXE loads MPRSERV, MPRSERV MSPWL32 */
                 "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL",
                 /* the shell (SYSTEM.INI shell=calc.exe, MSGSRV32 WinExecs it) and its DLLs */
-                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMDLG32.DLL" };   /* + notepad's */
+                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMDLG32.DLL",   /* + notepad's */
+                "SHDOCVW.DLL", "BROWSEUI.DLL",   /* + Explorer's integrated shell (ieshell.inf) */
+                "..\\rebased\\OLE32.DLL" };   /* rebased to 0x7F400000: its own base runs into 0x7FFE0000 (the host's shared user page) */
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
-                _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
-                CopyFileA(src, p, TRUE);
+                const char* bn = strrchr(m16[i], '\\') ? strrchr(m16[i], '\\') + 1 : m16[i];
+                _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, bn);
+                CopyFileA(src, p, bn == m16[i]);   /* a rebased one replaces an older copy */
             }
             /* Win98's own USER32.DLL (lifted into this host): USER.EXE's LibEntry LoadLibrary32s it
              * and calls InitSharedTable/InitUsrMprThunks. Over the proxy a plain xcopy run leaves. */
@@ -274,6 +282,7 @@ static int host_main(int argc, char** argv) {
                  * tools/rebase.py work/sys work/rebased notepad.exe=0x01100000, then renamed
                  * notepad_1100.exe so its catalog is not the 0x400000 one) */
                 static const char *const prog[][2] = { { "calc.exe", "WINDOWS\\CALC.EXE" }, { "..\\rebased\\notepad_1100.exe", "WINDOWS\\NOTEPAD.EXE" },
+                    { "..\\rebased\\explorer_1400.exe", "WINDOWS\\EXPLORER.EXE" },   /* rebased as notepad: explorer.exe=0x01400000 */
                     { "winmine.exe", "WINDOWS\\WINMINE.EXE" }, { "sol.exe", "WINDOWS\\SOL.EXE" }, { "cards.dll", "WINDOWS\\SYSTEM\\CARDS.DLL" } };
                 for (int i = 0; i < (int)(sizeof prog / sizeof *prog); i++) {
                     _snprintf(src, MAX_PATH, "%s\\%s", dir, prog[i][0]); _snprintf(p, MAX_PATH, "%s\\%s", r, prog[i][1]);
@@ -319,7 +328,7 @@ static int host_main(int argc, char** argv) {
          * bases are held from the host's start (native32_hold_image's relaunch),
          * or a host heap lands there first and the image is relocated where no
          * lifted code is (vxd32's PageReserve takes a held base as the image's). */
-        static const char* const later[] = { "mprexe.exe", "calc.exe", "..\\rebased\\notepad_1100.exe" };
+        static const char* const later[] = { "mprexe.exe", "calc.exe", "..\\rebased\\notepad_1100.exe", "..\\rebased\\explorer_1400.exe" };
         for (int i = 0; i < (int)(sizeof later / sizeof *later); i++) {
             char img[MAX_PATH];
             IMAGE_DOS_HEADER dh;

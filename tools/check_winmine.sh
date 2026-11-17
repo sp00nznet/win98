@@ -14,7 +14,7 @@ from PIL import Image, ImageChops
 try: a, b = (Image.open(f'work/winmine_gate_{t}.png').convert('RGB') for t in (39, 46))
 except OSError: print('winmine: no screenshot'); sys.exit(1)
 cell, nb, timer = (147, 195, 162, 210), (163, 195, 178, 210), (180, 123, 220, 147)
-uncovered = ImageChops.difference(b.crop(cell), b.crop(nb)).getbbox() is not None
+uncovered = ImageChops.difference(b.crop(cell), a.crop(cell)).getbbox() is not None   # (not vs its neighbour: an empty cell flood-fills it too)
 was_covered = ImageChops.difference(a.crop(cell), a.crop(nb)).getbbox() is None
 ticking = ImageChops.difference(a.crop(timer), b.crop(timer)).getbbox() is not None
 ok = uncovered and was_covered and ticking

@@ -2347,3 +2347,111 @@ check_winmine and check_notepad pass.
 (the failed-load cleanup). (3) Notepad's scroll bars show navy
 (COLOR_SCROLLBAR? check by pixel). Keys 1 and 2 never repaint calc's
 buttons, while + 3 = do. Worth a look.
+
+### Session 29: Explorer runs its own code up to the Start button; Win98's own appearance; TDB+54 (handoff)
+
+pcrecomp w98 ef4ec03 (TDB+54), 428630a (Explorer runtime). Relift w16test with
+the README line (now + explorer_1400.exe, shdocvw.dll, rebased ole32.dll), after
+`tools/vtseeds.py` for ole32, shdocvw, shell32 and explorer_1400, and run
+`py -3 tools/reginst.py w98\xcopy` once (it also empties the box's Run and
+RunOnce keys each time). No lifter or disasm change, so johnny and civnet were
+not relifted. The shell32 lift changed (seeds), and every gate still passes.
+
+**TDB+54 (task 1).** KRNL386 seg1 9002, the task kill, reads TDB+54 as the
+task's kernel32 thread and clears [thread+38h]. Vxd32's thunk 32 (a Win32
+task's TDB, made by the host) now sets it from creation. Win16 tasks are made
+by KRNL386 itself: their thread comes from kernel32 inside CreateTask
+(16->32 stub from 04BF:733x, then VWIN32 8). Winmine's old failure (a missing
+SOUND import) killed the task before that point. So that path can still read
+0 on another failed Win16 load. A real-Win98 ordering check is still needed:
+is the thread made before import resolution there?
+
+**Explorer (task 2), how far it gets.** SYSTEM.INI shell=Explorer.exe. Its
+lifted code runs: shell32's Shl3216 thunks, the registry, ole32 and shdocvw
+class factories, the tray thread. It stops in the tray's Start-button
+setup. USER thunk 28 -> 0B07:01C8 SendMessages into Explorer's 32-bit window
+procedure through a KRNL386 window-proc relay (0DB7:0232 -> 2:7616 -> far32
+user32 0xBFF53955). The far32's arguments read as 16-bit words
+(154F154F 1E280001), and the return (8B4E154F) faults in w16_retf32. This is
+the same relay family as session 28's notepad nested thunk; look at the
+ss:esp that 2:7616 hands over. No Explorer paint yet: the teal desktop in
+the shots is USER's own desktop window, and the earlier "rundll32" message
+box (out/s29ex_58.png, from before the RunOnce fix) was drawn by Explorer's
+ShellExecute.
+
+Fixed on the way (in order):
+- shell32's flat thunks arrive already patched (INSTDATA 0x7FD38508/28 is
+  int3 filler in the file). vxd32 recognises the patched QT
+  (`33 C9 8A 4D FC 8B 14 8D tbl B8 tgt FF E0`) and FT
+  (`0F B6 D1 8B 14 95 tbl 68 tgt C3`) forms. They are never run.
+- Explorer ran the host's RunOnce entries. A missing box key falls through
+  to the real one (read-only), so Explorer would ShellExecute Windows 11's
+  startup lines. reginst creates empty Run/RunOnce/RunOnceEx/RunServices(Once)
+  keys under HKLM and HKCU, and skips Active Setup lines.
+- USER writes RunOnce *DisplayFallback ("rundll32 ... desk.cpl ,-1") when
+  HKCC\Display\Settings is missing (USER seg 21 3A67). reginst writes it:
+  800,600, 16 bpp, 96 dpi.
+- timezone.inf leaves "!!!First Boot!!!", which makes Explorer WinExec
+  timedate.cpl /m (0x0140A1F4). reginst writes TimeZoneInformation from
+  Win98's first zone whose bias matches the host's.
+- int 21h 5704-5707 (DOS 7 access and creation times); VWIN32 11
+  (CreateFileMapping), 1A/1B (Suspend/ResumeThread: a suspended new thread
+  starts on its resume), 59 (InterlockedIncrement/Decrement without xadd);
+  VMM 9 (UnmapViewOfFile of a shared view).
+- ole32 is rebased to 0x7F400000 (its base 0x7FF20000 + C1000 runs into the
+  host's 0x7FFE0000 page, so kernel32 relocated it and its DllMain ran
+  unlifted, which faulted). browseui is not lifted yet: with it plus the
+  first ole32 catalog, the exe (452 MB image) failed CreateProcess with 308.
+- tools/vtseeds.py: relocated code pointers in runs of 2+ (or outside .text),
+  minus switch tables, become catalog seeds. COM methods are reached only
+  through vtables.
+- identity: a far call into a not-present selector (gdi32 thunk A5 -> GDI seg
+  41, selector 071F, load-on-call) runs the lifted segment named by the
+  module's in-memory segment table. The base scan skips not-present
+  selectors (their "base" read 01000000).
+
+**Appearance.** Once Display\Settings existed, USER read
+HKCU\Control Panel\Colors (and metrics). Those values fell through to
+Windows 11's: white faces, a black desktop, a light gradient caption. New in
+regbox32: a box key holding a value "pcrecomp:whole" never falls through for
+a missing value. reginst marks Colors, Desktop and Desktop\WindowMetrics.
+Now windows are Win98 grey (198,195,198), the caption is navy, and the
+desktop is teal (0,130,132). Windows sit 8,13 px up and left of the old
+references (the old ones used Windows 11's metrics). check_calc and
+check_notepad now search ±20 px. check_notepad compares "Hi!" only, because
+the caption itself changed. check_winmine compares the clicked cell with its
+own earlier image (flood fill could uncover its neighbour too: a flaky gate).
+
+**Guards.** Explorer's windows, tray, hotkeys and shell hooks are Win98
+USER's, inside the guest: nothing reaches the host's shell. Its file opens
+all go through vxd32's work/root box. The startup lists and appearance keys
+are now the box's own.
+
+**Task 3.** Notepad's scroll bars are still navy with Win98's own colours
+(out/notepad gate shot), so it is not a host-colour leak. Next: the scroll
+bar brush (COLOR_SCROLLBAR is grey 192 by default; probably the stand-in's
+pattern or mono brush). Calc keys 1/2: not looked at.
+
+**Task 4.** No check_explorer.sh: no Explorer milestone with a paint yet.
+
+ponytail (this session):
+- reginst: AddReg only; flags 1/2/0x10001/0x10000/0x20000 read; time zone
+  picked by bias only; Display\Settings values written by hand (setup's
+  class installer writes them on Win98).
+- VWIN32 11: the handle stays as it is (one DOS handle table).
+- VWIN32 1A/1B: a running thread is only counted, not stopped.
+- VMM 9: no-op (read as a flush).
+- not-present far call: KRNL386 still has the segment unloaded.
+- regbox "pcrecomp:whole": the marker shows in an enumeration.
+- vtseeds: a lone code pointer inside .text is skipped.
+
+**Regression.** check_m1, check_w16, check_calc, check_sol, check_winmine,
+check_notepad pass (calc/notepad/winmine with the new forms above). One
+check_m1 run failed with "no USER32 proxy" while a w16test from a trace run
+was still alive. It passed alone.
+
+**Next.** (1) The window-proc relay fault in the tray (above). Then the
+desktop's first paint (shdocvw's desktop or shell32's) and the taskbar.
+(2) Lift browseui (Start menu bands) and keep the exe under the image limit:
+try fewer garbage functions (ole32's catalog still has about 14k
+unimplemented ops from data decoded as code). (3) Then Start -> Run -> calc.

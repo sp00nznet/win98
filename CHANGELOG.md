@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Session 29: Explorer (W16_SHELL=Explorer.exe) runs its own lifted code on
+  Win98's lifted shell32, shdocvw and ole32 up to building the taskbar's
+  Start button; no desktop or taskbar paint yet. tools/reginst.py fills the
+  registry box from Win98's own INFs (shell.inf, ieshell.inf, timezone.inf,
+  and the REGINST resources of shell32/shdocvw/browseui), plus
+  HKCC\Display\Settings for the stand-in display. tools/vtseeds.py adds seeds
+  for vtable methods. USER's appearance keys are now marked whole in the box,
+  so Windows 11's colours and metrics no longer leak through: windows have
+  Win98's grey and the desktop is teal. Because USER now uses its own metrics,
+  the calc and notepad gates search ±20 px for their reference. The winmine
+  gate compares the clicked cell with its own earlier image, not with its
+  neighbour, because flood fill could uncover both.
+  A Win32 task's TDB+54 holds its thread from creation.
+
 - Milestone 2, session 28: Notepad runs as the shell and types text
   (tools/check_notepad.sh). The fault was a far call made as `push cs; call
   near` whose callee returned into an address it had pushed: the lifter now
