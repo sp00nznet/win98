@@ -41,6 +41,9 @@ Tests: `sh tools/check_<gate>.sh`, one at a time, on the hidden desktop (`HIDDEN
 - TDB+54 for a Win16 task whose load fails before CreateTask still reads 0. Not reproducible since winmine's
   SOUND import was answered (Session 27); which thread value goes there on real Win98 needs a real-Win98
   ordering check. Left as is.
+- Folder icons in a folder view alternate grey and yellow by position (C:\: 1st and 3rd grey, 2nd and 4th
+  yellow; the same image-list image). check_mycomp's yellow count passes only with four folders in C:\ (a TEST
+  folder from earlier runs); on a fresh work\root (three folders) it fails, with or without the fix below.
 - Intermittent far-call miss at 0A2F:1C63: seen once (Session 36); 0 in 5 (s37) and 0 in 8 (s39) runs since.
 - No sound, network, printing or real devices, by design.
 
@@ -3120,3 +3123,19 @@ ponytail (this session):
 - PR_SHARED takes the first free 64 KB-aligned hole in 80000000-BFFFFFFF; PR_PRIVATE/PR_SYSTEM stay "anywhere".
 
 Regression: all 11 gates pass (work/s41gates_a.txt).
+
+### After Session 41: My Computer's icon black on a fresh install (pcrecomp w98-iconfix db3c05e)
+
+Without work/root\WINDOWS\ShellIconCache, My Computer's desktop icon was a black square (check_explorer
+failed on every new install; it passed only with a cache left by an earlier session). Its icon is
+Explorer.exe,0 (DefaultIcon), extracted from the file on Explorer's background thread and added with
+ImageList_ReplaceIcon. GDI did call DISPLAY.BitBlt for the colour cell, but drv16's surf_of found no palette
+for the image list's 4 bpp DIB section and dropped every blit: drv16 kept each DIB section's palette slot
+under the PDEVICE's flat address at CreateDIBPDevice, and GDI had since moved that block (the list grows on
+a fresh install). Only the mask blit (mono, no palette) landed, so the cell stayed all zero and opaque.
+With a cache, the list is read whole and never grows. Fix (drv16 dib_pal): the slot is found by its own
+selector, which the PDEVICE's deBitmapInfo (+20h) carries, and the slot records the new address.
+Debug: W16_ARGS=seg005_8D10 (GDI PatBlt) showed the call reaching DISPLAY with no driver trace after it.
+
+Regression on a fresh workoot with no cache: check_explorer and check_calc pass, check_startprog passes (2 of 2;
+one earlier solitaire miss), check_mycomp fails as it did before the fix (the grey folders, see Status).
