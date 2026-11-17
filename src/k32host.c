@@ -244,7 +244,7 @@ static int host_main(int argc, char** argv) {
                  * MPR its object (MPR ordinal 7); MPREXE loads MPRSERV, MPRSERV MSPWL32 */
                 "MPREXE.EXE", "MPRSERV.DLL", "MSPWL32.DLL",
                 /* the shell (SYSTEM.INI shell=calc.exe, MSGSRV32 WinExecs it) and its DLLs */
-                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL", "COMMCTRL.DLL" };
+                "MSVCRT.DLL", "SHELL32.DLL", "SHLWAPI.DLL", "COMCTL32.DLL" };
             for (int i = 0; i < (int)(sizeof m16 / sizeof *m16); i++) {
                 _snprintf(src, MAX_PATH, "%s\\%s", dir, m16[i]); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\%s", r, m16[i]);
                 CopyFileA(src, p, TRUE);
@@ -253,6 +253,13 @@ static int host_main(int argc, char** argv) {
              * and calls InitSharedTable/InitUsrMprThunks. Over the proxy a plain xcopy run leaves. */
             _snprintf(src, MAX_PATH, "%s\\USER32.DLL", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\USER32.DLL", r);
             if (getenv("W16_LIBMAIN")) CopyFileA(src, p, FALSE);
+            /* COMCTL32's ThunkConnect32 partner (Cctl1632_ThunkData16): setup installs
+             * KOMMCTRL.DLL as COMMCTRL.DLL (subase.inf); the CABs' commctrl.dll is setup's own */
+            _snprintf(src, MAX_PATH, "%s\\kommctrl.dll", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\COMMCTRL.DLL", r);
+            CopyFileA(src, p, FALSE);
+            /* and SHELL.NEW as SHELL.DLL (shell.inf), SHELL32's partner (Shl3216_ThunkData16) */
+            _snprintf(src, MAX_PATH, "%s\\shell.new", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\SYSTEM\\SHELL.DLL", r);
+            CopyFileA(src, p, FALSE);
             _snprintf(src, MAX_PATH, "%s\\calc.exe", dir); _snprintf(p, MAX_PATH, "%s\\WINDOWS\\CALC.EXE", r);
             CopyFileA(src, p, TRUE);
             {   /* the raster fonts GDI.EXE's init opens (vgasys/vgafix/vgaoem.fon, by search path) */

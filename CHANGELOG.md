@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Milestone 2, session 23: calc's process init failed because the root had
+  setup's own commctrl.dll and shell.dll; Win98 installs KOMMCTRL.DLL and
+  SHELL.NEW under those names (COMCTL32's and SHELL32's ThunkConnect32
+  partners). With them, calc's DLLs initialize and its window procedure runs
+  from 16-bit USER (FT_Prolog thunk stubs, the run-time wndproc thunk, and
+  three code-map/jump-table fixes). A dying thread gives up the Win16Mutex.
+  Stops in USER seg 52 0F49 after calc's first message.
 - Milestone 2, session 21: a dying thread's teardown runs to the end (it frees
   its own fs; the reload keeps the cached base) and VWIN32 now runs kernel32's
   thread-termination routine (DLL detach, USER signal 20h) first; KRNL386's

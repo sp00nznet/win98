@@ -49,8 +49,8 @@ through kernel32's own QT_Thunk:
 ```
 set NE_IDENTITY_SEL=1
 py -3 tools\w16_seeds.py work\sys > work\seeds\w16.json
-py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json --shims ..\pcrecomp-w98\runtime\win16\identity work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE work\sys\DDEML.DLL work\sys\MSGSRV32.EXE work\sys\shell.dll work\sys\commctrl.dll
-copy work\sys\shell.dll work\root\WINDOWS\SYSTEM\SHELL.DLL     (MSGSRV32 loads it from the guest disk)
+py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json --shims ..\pcrecomp-w98\runtime\win16\identity work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE work\sys\DDEML.DLL work\sys\MSGSRV32.EXE work\sys\shell.new work\sys\kommctrl.dll
+(shell.new and kommctrl.dll are what setup installs as SHELL.DLL and COMMCTRL.DLL, per shell.inf/subase.inf; k32host copies them into work\root under those names)
 py -3 tools\lift.py w16test work\sys\xcopy32.mod work\sys\kernel32.dll work\sys\gdi32.dll work\sys\advapi32.dll work\sys\user32.dll work\sys\mpr.dll work\sys\mprexe.exe work\sys\mprserv.dll work\sys\mspwl32.dll work\sys\calc.exe work\sys\msvcrt.dll work\sys\shlwapi.dll work\sys\comctl32.dll work\sys\shell32.dll
 sh tools/check_w16.sh
 set W16_LIBMAIN=KERNEL & build\w16test.exe --mute    (KRNL386 boots; W16_TRACE=1, W16_FN=2 for detail)

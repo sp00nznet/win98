@@ -61,7 +61,7 @@ def seeds(path):
 
 if __name__ == '__main__':
     root = sys.argv[1] if len(sys.argv) > 1 else 'work/sys'
-    res = dict(seeds(os.path.join(root, f)) for f in ('USER.EXE', 'GDI.EXE', 'shell.dll'))
+    res = dict(seeds(os.path.join(root, f)) for f in ('USER.EXE', 'GDI.EXE', 'shell.new'))
     # KRNL386 call targets that ne_codemap's descent lost to data decoded as
     # code over them (seg 1 83EA runs through 852A, the int 21h handler it
     # calls as `pushf; push cs; call 852A`): seeds decode first and win.
@@ -73,4 +73,8 @@ if __name__ == '__main__':
     # GDI 11:2B73 `call cs:[si+2CADh]`: three near stubs (`jmp far` to imports)
     # its init steps through, counted by the words at 2C96h (1, 6, 4, 0).
     res['GDI'].setdefault('11', []).extend(['0x2c9e', '0x2ca3', '0x2ca8'])
+    # USER 30:3D12: the 32-bit window procedure's 16-bit entry. A KERNEL-owned
+    # run-time thunk (`push proc32; push 3; jmp far` KRNL386 2:7616) reaches
+    # it through the table at KRNL386 4:2214 (filled at run time).
+    res['USER'].setdefault('30', []).append('0x3d12')
     json.dump(res, sys.stdout)

@@ -1825,3 +1825,90 @@ ponytail (this session):
 
 **Regression.** check_m1 (/?, /S /I copy, /P) and check_w16 pass after
 each runtime change.
+
+### Session 23: calc's process init failed on the wrong COMMCTRL.DLL (and SHELL.DLL); calc's window procedure runs (handoff)
+
+pcrecomp w98: this session's commit; win98 this commit. Relink work/w16 (README:
+shell.new and kommctrl.dll replace shell.dll and commctrl.dll; w16_seeds.py
+changed, regenerate work/seeds/w16.json) and relift w16test and xcopy
+(drive32 changed).
+
+**Root cause (task 1).** COMCTL32's DllMain is `ThunkConnect32(&data,
+"commctrl.dll", "comctl32.dll", hinst, reason)` and returns FALSE when it
+fails; that FALSE is what ended calc's process (kernel32's DLL-init failure
+path: termination thread, QueueToThread). The 16-bit side must export
+`Cctl1632_ThunkData16`. The CABs' `commctrl.dll` (48 KB, PRECOPY1/2) is
+setup's own Win 3.x-style control DLL with no thunk data: LoadLibrary16
+loaded it, ThunkConnect32 found no thunk data, freed it (the "far 14DF:009C"
+in session 22 was its WEP, not an entry point) and failed. Win98 installs
+**KOMMCTRL.DLL as COMMCTRL.DLL** (subase.inf: `commctrl.dll, kommctrl.dll`).
+The same thing applies to SHELL32's `ThunkConnect32("shell.dll",
+"shell32.dll")` (`Shl3216_ThunkData16`): Win98 installs **SHELL.NEW as
+SHELL.DLL** (shell.inf, flag 8, a forced rename). Session 21's REG.DAT came
+from that setup-time SHELL.DLL. Fix: k32host copies kommctrl.dll and
+shell.new into work/root under their installed names (overwriting), and
+ne_link and w16_seeds use them. Other renames in the INFs that will matter
+later: `commdlg.dll, commdlg.new` and `ver.dll, ver.new`.
+
+**Task 2 (a dying thread and the Win16Mutex).** vwin32_thread_done (VWIN32 2B)
+now gives up the Win16Mutex if the dying thread's TDBX owns it: recursion
+and owner cleared, the count lowered by the recursion, and handed to the
+first waiter as LeaveCriticalSection's 1E does. After the root-cause fix calc
+no longer dies, so this path did not run in the calc run (it is the generic
+guard). The 16-bit teardown on a freed fs (thunk 43 entering with fs base 0)
+was not reproduced after the fix and was not changed.
+
+**Then, on the way to calc's window (all generic unless marked).**
+- ne_codemap: a near call to a callee that opens `pop r16` and jumps through
+  the same register on its straight line (USER seg 54 9BE0: `pop bx; ...;
+  jmp bx`) makes the return address a function: the callee comes back
+  through dispatch_near, and 9BF0 was a near-call miss.
+- vxd32: the FT_Prolog form of the flat 32->16 stub (user32 0xBFF5D4AA,
+  `call $+5; pop edx; sub edx,25h; push edx; push imm; push FT_PrologPrime;
+  ret`), recognized by its bytes like the QT form: edx = [[stub+imm] +
+  cl*4], then kernel32 0xBFF7268D. It had run as native bytes and faulted.
+- identity: a 32-bit window procedure's 16-bit face is a thunk KERNEL writes
+  at run time (`66 68 proc32; 66 68 x; EA off sel`, calc's 0100592A via
+  KRNL386 2:7616): dispatch_far recognizes the bytes and does the two
+  pushes and the far jump. A far-call miss now also prints the 24 bytes at
+  the target.
+- w16_seeds: USER 30:3D12, where KRNL386 2:7616 jumps through its table at
+  4:2214 (ponytail: a seed; the table is filled at run time).
+- ne_codemap: a call target that a jump table's guessed extent had claimed
+  as data is code (GDI seg 1: a table guessed over 75A0..7607 hid 7600,
+  which 7860 calls; lifted as a short linear stub with unreachable
+  branches).
+- disasm32/drive32/generate: `jmp cs:[reg + table]` (a byte-offset index,
+  user32 0xBFF55BDA) is a jump table, like `jmp [reg*4 + table]`. Only with
+  the cs: prefix. Note: work/cat catalogs are cached, so disasm32's part only
+  applies to a fresh catalog; drive32's arms already put 0xBFF55BF8 in
+  user32's body.
+- identity: VWIN32 16-bit 0E (KRNL386 1:7584), USER seg 54 96B6's
+  foreground boost (0 for the old queue, 1 for the new one): a no-op.
+
+**Where it stops.** Calc's process init completes (COMCTL32 registers its
+classes through the FT thunks into COMMCTRL, SHELL32 connects), USER sends
+calc's first messages, and calc's window procedure (0100592A) runs from
+16-bit USER and returns (ax 000A). Then USER seg 52 0F49 (from seg 54 8A9B
+<- 85C4 <- 9582 <- 9262) faults reading `es:[eax+46h]` with a garbage 32-bit
+eax that it popped off the stack (a window pointer argument). The next step
+is the caller's frame: who pushed that dword, and whether the 16->32->16
+round trip through 3D12 (its `add sp, 8; retf 0Ch`, 12 bytes of arguments
+when [esi+2Fh] bit 0 adds the extra word in 9E2D) leaves sp where USER
+expects.
+
+**Not reached:** calc's window and first paint (task 3), so no screenshot
+against shots/calc_12p3_5.png; scripted input / 12+3= (task 4).
+
+ponytail (this session):
+- The Win16Mutex pointer 0xBFFC9470 (Win98 SE kernel32) in vwin32_thread_done.
+- The FT_Prolog continuation 0xBFF7268D (Win98 SE kernel32) hardcoded in ft_stub.
+- USER 30:3D12 is a seed, not found from the run-time table at KRNL386 4:2214.
+- VWIN32 16-bit 0E (foreground boost) is a no-op.
+- The run-time wndproc thunk is matched by its byte pattern only.
+- `jmp cs:[reg+disp]` is a jump table only with the cs: prefix.
+
+**Regression.** check_m1 (xcopy relifted) and check_w16 pass. johnny and
+civnet relifted into s23-* scratch trees, normal and identity mode, with
+5ca1290 and with this session's pcrecomp: identical C and mem_image.bin in
+all four (civnet without work/win16_imports.json, the same for both sides).
