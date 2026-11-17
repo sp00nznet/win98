@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Milestone 2, session 27: Win16 tasks wake on input. A task switch back to
+  the boot thread used to start a fresh guest thread instead of waking it, and
+  KRNL386's idle (int 2Fh 1689h, VWIN32 10h/11h) was missing. Solitaire deals
+  on a click and a card drags to a foundation (tools/check_sol.sh). Minesweeper
+  runs as the shell: a SOUND stand-in (no device), DISPLAY DIBtoDevice, and a
+  seed for its window procedure; a click uncovers a cell and starts the timer
+  (tools/check_winmine.sh). Notepad, rebased to 0x01100000, is lifted into
+  w16test and its code runs; it faults in a nested 16/32 thunk before its
+  window shows.
 - Milestone 2, session 25: VTDAPI 9 now returns a real system-time selector
   (USER's DGROUP:0 tick pointer; every event time was 0). SYSTEM.DRV timers
   run from a host tick thread, and USER's static SYSTEM/KEYBOARD imports go to

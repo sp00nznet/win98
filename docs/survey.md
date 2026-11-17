@@ -2187,3 +2187,84 @@ ponytail (this session):
 **Next.** (1) Sol's click: trace USER's queue (3:12EF) for the 0201 at 80,120
 and sol's wndproc. (2) Winmine's seg1 9002 fault: W16_TRACE around it.
 (3) Notepad: host EXE base. (4) Explorer. (5) The black digits.
+
+### Session 27: Win16 tasks wake on input (sol deals and drags), winmine runs, notepad lifted (handoff)
+
+pcrecomp w98 f0490d0, f95c689. Relink work/w16 with the README ne_link line
+(now with winmine/sol/cards) after `py -3 tools/w16_seeds.py work/sys >
+work/seeds/w16.json` (new WINMINE 1:03EE seed). Relift w16test with the
+README line (now + `work/rebased/notepad_1100.exe work/sys/comdlg32.dll`).
+No lifter or disasm change, so johnny/civnet were not relifted.
+
+**Sol's click.** USER queued the button messages and PostEvent'd sol's
+task, but sol never ran. Calc is a Win32 queue (flag 4 at queue+14h): its
+GetMessage waits through KERNEL.460, a kernel32 wait. Sol is Win16: it waits
+in KERNEL.30 WaitEvent -> Reschedule, which with nothing ready switches
+(VWIN32 01) to the boot task (DGROUP:13E2, TDB 0027). The boot thread was
+never parked through start_thread (it runs on the host's own thread), so
+`native32_w9x_switch_to` took it for an unstarted thread and started a new
+guest thread for its r0 instead of setting its wake event: the boot thread
+slept forever. Fixed (vxd32: g_boot_r0 is only ever woken). Then KRNL386's
+idle path (seg1 6060..60BA) ran for the first time: int 2Fh 1689h (now a
+no-op) and VWIN32 11h (block until a task is ready) / 10h (PostEvent's wake,
+seg1 75D5, while DGROUP:13E6 bit 0 says the scheduler idles): one host
+event, waited on with the machine given up. A click on the deck deals
+(out/s27sol_deal.png), and `drag 570,209,324,119@40` (new W16_INPUT verb:
+press, 8 moves, release) puts the ace of hearts on a foundation, score 10
+(out/s27sol_drag.png). Gate: `sh tools/check_sol.sh` (reference
+work/sol_ref_ace.png cut from out/s27sol_drag.png; the deal is the same
+every run).
+
+**Winmine.** The F000FF8B write was KRNL386 killing a task whose LoadModule
+failed (seg2 09F7 with error 2 -> seg1 9002 reads TDB+54, the thread, still
+0, so [0+38h] is the real-mode vector F000:FF53). Error 2 = an import not
+found: winmine imports SOUND (1, 2, 4, 5, 9, 10). SYSTEM.INI now says
+`sound.drv=sound.drv` and drv16 has a SOUND stand-in (no device: OpenSound
+-1 = S_SERDVNA, the rest no-ops; the MMSOUND stand-in is gone). Then its
+window procedure 1:03EE (no export, reached only through RegisterClass) is a
+seed, and GDI calls DISPLAY.21 DIBtoDevice for its tiles and LED digits
+(drv16 `disp_dibtodev`, clipped; X,Y is the DIB's top-left, the LED strips
+come with negative Y and the clip picks the digit). A click uncovers a cell
+and the timer runs: out/s27winmine_click.png. Gate: `sh
+tools/check_winmine.sh` (mines are random: the clicked cell must differ from
+its covered neighbour and the timer digits must change).
+
+Not fixed: the cleanup path itself (seg1 9002 on a task with no thread)
+would still fault on any other failed Win16 load.
+
+**Notepad.** Rebased with pcrecomp tools/pe/rebase.py to 0x01100000 and
+renamed work/rebased/notepad_1100.exe (lift.py keys catalogs by file name;
+the 0x400000 one in work/cat would give 0 functions). k32host holds its
+base from the start (as calc's and mprexe's; else a host heap lands there
+and kernel32 relocates it) and copies it as WINDOWS\NOTEPAD.EXE; COMDLG32
+goes into SYSTEM. With W16_SHELL=notepad.exe its lifted code runs from
+011010CC to its init's SetWindowTextA (notepad 1:2155 -> user32 BFF51BD4)
+and faults in kernel32 BFF7286D (the 16->32 return: `mov ebp,[bp-20h]` on a
+16-bit ss whose base reads as 14DF0000, i.e. the selector value, not a
+base): a nested 32->16->32 thunk (KRNL386 2:7616 relay, kernel32 BFF943F0)
+unwinds onto another task's stack (ss 14DF -> 148F -> 14D7 in the trace,
+"unwound to the far call at ss:sp 148F:8914"). Not looked at further.
+
+**"6"/"3" black.** Without keys (W16_TRACE run, shot at 38 s) 6, 3, 5, 4
+are all blue (0,0,255) in the shot; no later draw touches the "6" at
+202,212. The black ones (6, *, 3, -, . in one rectangle) show only after the
+keys of check_calc: a repaint after a key, not the first paint. Next: trace
+from the "+" key on for ExtTextOut/BitBlt into 195..275 x 205..290.
+
+**Explorer**: not started.
+
+ponytail (this session):
+- VWIN32 10h/11h: one auto-reset host event for the Win16 idle.
+- int 2Fh 1689h: no-op.
+- SOUND stand-in: no device, only winmine's six ordinals.
+- DIBtoDevice: X,Y read as the whole DIB's top-left; no lpTranslate.
+- W16_INPUT drag: 8 even steps, left button only.
+
+**Regression.** check_m1, check_w16, check_calc, check_sol, check_winmine
+pass. The gates now delete their old screenshots first (a run that made no
+shot could pass on the last one).
+
+**Next.** (1) Notepad's nested-thunk fault (SetWindowTextA from a Win32
+task: which stack does the 16->32 return land on). (2) The black digits
+after keys. (3) Sol's "Time: 0" (its timer never ticks; winmine's does).
+(4) Explorer.
