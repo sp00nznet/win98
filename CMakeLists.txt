@@ -7,7 +7,12 @@ project(win98 C)
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4 OR NOT MSVC)
   message(FATAL_ERROR "the host must be 32-bit MSVC: use build.cmd")
 endif()
-set(PCRECOMP "${CMAKE_SOURCE_DIR}/../pcrecomp-w98" CACHE PATH "pcrecomp checkout")
+if(DEFINED ENV{PCRECOMP})
+  file(TO_CMAKE_PATH "$ENV{PCRECOMP}" _pcr)
+else()
+  set(_pcr "${CMAKE_SOURCE_DIR}/../pcrecomp")
+endif()
+set(PCRECOMP "${_pcr}" CACHE PATH "pcrecomp checkout (PCRECOMP, else ../pcrecomp)")
 include(${PCRECOMP}/cmake/pcrecomp_gen.cmake)
 
 set(N32 ${PCRECOMP}/runtime/native32)
@@ -55,7 +60,7 @@ endif()
 # Milestone 2: USER.EXE, GDI.EXE, KRNL386.EXE lifted by ne_link (NE_IDENTITY_SEL=1)
 # into work/w16, built for Win16 identity mode (cpu.h RECOMP_W16_IDENTITY):
 # 16-bit selectors are native32 LDT entries, cpu->mem is 0.
-#   set NE_IDENTITY_SEL=1 & py -3 ../pcrecomp-w98/tools/ne/ne_link.py --work work/w16 work/sys/KRNL386.EXE work/sys/GDI.EXE work/sys/USER.EXE work/sys/DDEML.DLL
+#   set NE_IDENTITY_SEL=1 & py -3 ../pcrecomp/tools/ne/ne_link.py --work work/w16 work/sys/KRNL386.EXE work/sys/GDI.EXE work/sys/USER.EXE work/sys/DDEML.DLL
 file(GLOB W16_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/work/w16/src/*.c)
 if(W16_SOURCES)
   add_library(w16 STATIC ${W16_SOURCES})

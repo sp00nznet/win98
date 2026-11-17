@@ -11,3 +11,6 @@ __pycache__/
 *.png
 !docs/**/*.png
 out/
+# your CD image, and what Setup.cmd makes
+*.iso
+Windows 98 (recomp).cmd

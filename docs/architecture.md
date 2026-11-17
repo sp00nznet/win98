@@ -209,7 +209,7 @@ what lets a held mouse button be released while USER tracks a caption button.
 
 | Piece | Where |
 |---|---|
-| Disassembler, lifter, NE/PE tools | pcrecomp `tools/` (branch `w98`) |
+| Disassembler, lifter, NE/PE tools | pcrecomp `tools/` |
 | VxD answers (VMM, VWIN32, VCOND, registry) | pcrecomp `runtime/native32/vxd32.c` |
 | 16-bit identity runtime (LDT, thunks, DOS/DPMI) | pcrecomp `runtime/win16/identity/identity.c` |
 | Stand-in drivers (DISPLAY, KEYBOARD, MOUSE, SYSTEM, SOUND, DIBENG) | pcrecomp `runtime/win16/identity/drv16.c` |

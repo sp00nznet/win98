@@ -16,7 +16,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PCR = os.environ.get('PCRECOMP', os.path.join(ROOT, '..', 'pcrecomp-w98'))
+PCR = os.environ.get('PCRECOMP', os.path.join(ROOT, '..', 'pcrecomp'))
 TOOLS = os.path.join(PCR, 'tools')
 sys.path[:0] = [os.path.join(TOOLS, 'lift'), os.path.join(TOOLS, 'pe')]
 os.environ['LIFT32_W9X'] = '1'   # Windows 9x kernel32: far retf jumps, real es (lift32 W9X)

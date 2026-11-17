@@ -1,7 +1,7 @@
 # win98-recomp
 
 Windows 98 SE's own userland, statically recompiled with
-[pcrecomp](https://github.com/sp00nznet/pcrecomp) (branch `w98`) and run on
+[pcrecomp](https://github.com/sp00nznet/pcrecomp) and run on
 a modern Windows host, with no emulator. Sister of win2000-recomp.
 
 **This repository contains no Windows code or data.** Everything from your
@@ -34,14 +34,39 @@ How it works: [docs/architecture.md](docs/architecture.md).
 | 4 | GUI on lifted user32/gdi32 + USER.EXE/GDI.EXE via recomp16 | Win98 boots its own KRNL386/USER/GDI; calc (12+3= shows 15., `tools/check_calc.sh`) Solitaire (deal, clock: `tools/check_sol.sh`), Minesweeper (`tools/check_winmine.sh`) and Notepad (Win32, typing: `tools/check_notepad.sh`) run as the shell (W16_SHELL=) |
 | 5 | Win98's Explorer as the shell | desktop, taskbar, Start menu, Run, Programs > Notepad/Solitaire (check_explorer, check_run, check_startprog); My Computer paints and opens C: (check_mycomp) |
 
-## Building
+## Getting Started
+
+You need **your own copy of Windows 98 Second Edition**: its CD image, an
+`.iso`. Nothing from Windows is in this repository or downloaded for you;
+everything is extracted and built on your machine from your CD.
+
+1. Download this repository (the green **Code** button, then **Download ZIP**)
+   and unzip it, or `git clone` it, somewhere with 4 GB free.
+2. Put your Windows 98 SE `.iso` in that folder (or give it with
+   `Setup.cmd -Iso <path>`).
+3. Double-click **`Setup.cmd`**. From Git Bash, `./setup.sh` does the same
+   (`--iso FILE`, `--yes`, `--force`); it is Windows only, as the build is MSVC x86.
+4. Start Windows 98 with **`Windows 98 (recomp).cmd`** in that folder.
+
+The script asks before installing anything it needs (Python and its packages,
+7-Zip, Visual Studio 2022's C++ Build Tools, CMake, Ninja, and pcrecomp beside
+this folder, or where `PCRECOMP` points), then extracts the CD and its CABs,
+seeds, lifts and builds, and fills the guest's registry box and C:\. The first
+run takes about an hour (52 minutes measured, about 3 GB: extracting the CABs,
+then the lift and the compile); a rerun skips every finished step (`-Force`
+redoes them). Everything it does goes to `setup.log`.
+
+## Building by hand
 
 Visual Studio 2022 (x86 tools), CMake, Ninja, Python 3 with `capstone` and
-`pefile`, 7-Zip, pcrecomp at `../pcrecomp-w98`.
+`pefile` (and `pillow` for hiddenrun and the gates), 7-Zip, pcrecomp at `../pcrecomp`
+(or `PCRECOMP`). `tools/setup.ps1` runs these steps in this order: extract the CD and CABs,
+rebase, `py -3 tools\seeds.py` (every seed file named below), ne_link, the four lifts,
+build.cmd, reginst, a first boot (to lay out work\root), then `startmenu.py`.
 
 ```
-7z x -owork\iso <your Win98 SE .iso>
-for %c in (work\iso\WIN98\*.CAB) do 7z e -y -owork\sys %c
+7z x -owork\cd <your Win98 SE .iso>
+for %c in (work\cd\WIN98\*.CAB) do 7z e -y -owork\sys %c
 py -3 tools\lift.py calc work\sys\calc.exe
 py -3 tools\lift.py notepad work\sys\notepad.exe
 build.cmd
@@ -66,14 +91,14 @@ through kernel32's own QT_Thunk:
 ```
 set NE_IDENTITY_SEL=1
 py -3 tools\w16_seeds.py work\sys > work\seeds\w16.json
-py -3 ..\pcrecomp-w98\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json --shims ..\pcrecomp-w98\runtime\win16\identity work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE work\sys\DDEML.DLL work\sys\MSGSRV32.EXE work\sys\shell.new work\sys\kommctrl.dll work\sys\winmine.exe work\sys\sol.exe work\sys\cards.dll
+py -3 ..\pcrecomp\tools\ne\ne_link.py --work work\w16 --seeds work\seeds\w16.json --shims ..\pcrecomp\runtime\win16\identity work\sys\KRNL386.EXE work\sys\GDI.EXE work\sys\USER.EXE work\sys\DDEML.DLL work\sys\MSGSRV32.EXE work\sys\shell.new work\sys\kommctrl.dll work\sys\winmine.exe work\sys\sol.exe work\sys\cards.dll
 (shell.new and kommctrl.dll are what setup installs as SHELL.DLL and COMMCTRL.DLL, per shell.inf/subase.inf; k32host copies them into work\root under those names)
 py -3 tools\lift.py w16test work\sys\xcopy32.mod work\sys\kernel32.dll work\sys\gdi32.dll work\sys\advapi32.dll work\sys\user32.dll work\sys\mpr.dll work\sys\mprexe.exe work\sys\mprserv.dll work\sys\mspwl32.dll work\sys\calc.exe work\sys\msvcrt.dll work\sys\shlwapi.dll work\sys\comctl32.dll work\sys\shell32.dll work\rebased\notepad_1100.exe work\sys\comdlg32.dll work\rebased\explorer_1400.exe work\sys\shdocvw.dll work\rebased\ole32.dll work\sys\browseui.dll work\sys\shdoc401.dll
 (Explorer: rebase.py ... explorer.exe=0x01400000, renamed explorer_1400.exe, and ole32.dll=0x7F400000 (its own base
 runs into the host's 0x7FFE0000 page); seeds first: py -3 tools\vtseeds.py <module> work\seeds\<file>.json for
 work\rebased\ole32.dll, work\sys\shdocvw.dll, work\sys\shell32.dll, work\rebased\explorer_1400.exe, work\sys\browseui.dll; the registry box:
 py -3 tools\reginst.py w98\xcopy; then set W16_SHELL=Explorer.exe)
-(first: py -3 ..\pcrecomp-w98\tools\pe\rebase.py work\sys work\rebased notepad.exe=0x01100000, then rename it notepad_1100.exe)
+(first: py -3 ..\pcrecomp\tools\pe\rebase.py work\sys work\rebased notepad.exe=0x01100000, then rename it notepad_1100.exe)
 (build.cmd links each lifted module as its own DLL next to the exe, build\w16test_<module>.dll,
 at fixed bases above 2 GB: one image of the whole lift no longer started; pcrecomp_gen_parts)
 sh tools/check_w16.sh

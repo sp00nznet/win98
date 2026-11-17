@@ -11,7 +11,7 @@ reachable by the code map, so they become ne_link --seeds.
 """
 import json, os, struct, sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'pcrecomp-w98', 'tools', 'ne'))
+sys.path.insert(0, os.path.join(os.environ.get('PCRECOMP', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'pcrecomp')), 'tools', 'ne'))
 from ne_parse import parse_ne
 
 
