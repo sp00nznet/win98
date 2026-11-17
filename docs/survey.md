@@ -2,6 +2,25 @@
 
 Stage 1 survey of the kernel boundary. `tools/survey.py work/sys/kernel32.dll` (and `--thunks`) reproduces it.
 
+## Status: done / what works / known gaps (as of Session 37)
+
+**Done enough to use.** Windows 98 SE's own userland (KRNL386/USER/GDI lifted 16-bit, kernel32/user32/gdi32/shell32/
+Explorer and friends lifted 32-bit) boots on Windows 11 as one program, no emulator or VM, all in `work/root`.
+
+**What works** (each has a gate in `tools/check_*.sh`; all 10 pass):
+- xcopy32 `/?` and a tree copy (check_m1); the 16-bit thunk round trip (check_w16).
+- Calculator, Solitaire, Minesweeper, Notepad as the shell (check_calc, sol, winmine, notepad).
+- Win98's Explorer as the shell: desktop icons, taskbar, clock, Start menu (check_explorer);
+  Start > Run > calc (check_run); Start > Programs > Accessories > Notepad and Games > Solitaire,
+  with taskbar buttons (check_startprog).
+- Double-clicking My Computer opens its folder window with a taskbar button, no fault (check_mycomp).
+
+**Known gaps.**
+- The My Computer window does not paint (its frame gets no WM_PAINT/NCPAINT drawing on screen); so the C: window is not reached.
+- Explorer's toolbar gripper, Favorites, Internet Explorer's icon, calc keys 1/2 (dark), TDB+54 (Session 36 list).
+- Intermittent far-call miss at 0A2F:1C63 (seen once in Session 36; not in 5 runs in Session 37).
+- No sound, network, printing or real devices, by design.
+
 ## Load addresses
 kernel32 0xBFF70000, user32 0xBFF50000, gdi32 0xBFF20000. All three carry relocations, so they can be rebased like Win2000's.
 
@@ -2898,3 +2917,42 @@ ponytail (this session):
 
 Not done: C: drive window, task 4 (taskbar buttons already show for Notepad/Solitaire; gripper,
 Favorites, IE icon, calc keys, TDB+54).
+
+### Session 37: GDI's 32-bit code segments (the My Computer crash); the folder window opens but does not paint (handoff)
+
+pcrecomp w98 edb2030 (disasm, lifter, runtime debug aids). Relink work/w16 with the README lines (ne_link), then build.cmd.
+
+**Root cause of the crash at 41:0388 (task 1).** Not the code map or a relocation: GDI.EXE's segments 32, 36, 37 and 39
+(global 36, 40, 41, 43) carry NE flag 2000h (NS32BIT: the DIB engine's 32-bit code), and pcrecomp decoded every NE segment
+as 16-bit. GDI 37:034C is `66 55 0F B7 EC` = `push bp; movzx ebp, sp` as use32 code but `push ebp; movzx bp, sp` as 16-bit,
+and so on: 0388 read `ds:[esi+esi]` off a mis-decoded `lds`. decode16 now takes `use32` (32-bit operands and addresses by
+default, 66h/67h select 16-bit; rel32 near branches, 16:32 far pointers, 4-byte segment-register pushes); ne_lift pushes and
+pops 4-byte return addresses for o32 near calls/rets, 8 bytes for a use32 segment's own o32 retf, and reads m16:32 pointers
+for o32 indirect far calls/jumps; o32 enter/leave keep ebp. KRNL386's two `66 FF` far jumps (seg001 7610/7614, the DPMI
+fault return) now read the selector at +4 as the CPU does (it was +2). `tools/disasm/test_decode16_use32.py` checks it.
+
+**What runs.** Double-click My Computer: no fault, a "My Computer" taskbar button, the folder thread idles in its message
+loop (out/s37_mycomp.png). `tools/check_mycomp.sh` gates that. The window itself is never drawn, so C: is not reached.
+
+**Where it stops (next step).**
+- The frame is created with CW_USEDEFAULT x4, style 2CF0000 (browseui 7F345CFE). USER's CreateWindowEx internal (seg062
+  0F5D..1189, the 16-bit side of user32's thunk) computes 22,22 and 600x413 (seg062_1782: cascade + MulDiv(work,3,4);
+  monitor at USER ds:11A2, rcWork 0,0,800,572 is right) and does not take the STARTF_USESIZE path.
+- After ShowWindow(0100, SW_SHOWNORMAL) nothing reaches DISPLAY except icon-sized bitmaps and the taskbar, and children
+  are laid out with width 0 (SetWindowPos 014C cx 0 cy -81): the frame's client rect is empty. None of USER's
+  `push 24h` (WM_GETMINMAXINFO) sites runs. Next: read the frame's rect after create (the WND at USER seg85
+  10000h+hwnd is not RECT16 at +10h as tried; `mem 85:OFF@T` dumps it), find what empties it, and check 0100 is the frame.
+- Debug aids: W16_ARGS now prints ax..di; W16_INPUT `mem N:OFF@T` dumps 16 words of a global segment.
+
+**Task 2.** startprog ran 5 more times after the fix (plus the gate run): no far-call miss at 0A2F:1C63. One Solitaire
+False overlapped a second hidden run I started on the same desktop by mistake; not counted. Not found.
+
+**Regression.** All 9 gates pass after the change, plus check_mycomp. johnny and civnet relifted in
+work/s37/s37-{johnny,civnet}-{old,new}-{n,i} (dd866d4 vs edb2030, normal and identity mode): identical work/ trees, all
+four (neither has use32 segments). generate.py and lift32 are unchanged, so there was no 32-bit relift.
+
+ponytail (this session):
+- check_mycomp checks only "no fault + taskbar button" until the window paints.
+- A use32 near target is assumed under 64K (`call/jmp reg32` dispatches its low word).
+
+Not done: the C: window, task 3 (gripper, Favorites, IE icon, calc keys, TDB+54).
