@@ -22,7 +22,11 @@ function(w98_host name main)
   endif()
   add_executable(${name} ${main} ${N32}/native32.c ${N32}/modules32.c ${N32}/regbox32.c
                  ${PCRECOMP}/runtime/recomp32/image_loader.c ${PCRECOMP}/runtime/recomp32/recomp_trace.c ${ARGN})
-  pcrecomp_gen_sources(${name} DIR ${CMAKE_SOURCE_DIR}/src/gen/${gen})
+  if(W98_PARTS_${name})
+    set(W98_PARTDIR_${name} ${CMAKE_SOURCE_DIR}/src/gen/${gen} PARENT_SCOPE)   # parts after the host's own settings
+  else()
+    pcrecomp_gen_sources(${name} DIR ${CMAKE_SOURCE_DIR}/src/gen/${gen})
+  endif()
   target_include_directories(${name} PRIVATE src src/gen/${gen} ${N32} ${PCRECOMP}/runtime/recomp32)
   target_compile_definitions(${name} PRIVATE RECOMP_RETADDR=0u _CRT_SECURE_NO_WARNINGS
                              RECOMP_FLAT_MEMORY RECOMP_LOCAL_REGS)
@@ -67,6 +71,8 @@ if(TARGET w16 AND EXISTS ${CMAKE_SOURCE_DIR}/src/gen/xcopy/recomp_dispatch.c)
   if(NOT EXISTS ${CMAKE_SOURCE_DIR}/src/gen/w16test/recomp_dispatch.c)
     set(W98_GEN_w16test xcopy)
   endif()
+  # one DLL per lifted module (the shell's lift outgrew one image: CreateProcess error 308)
+  set(W98_PARTS_w16test ON)
   w98_host(w16test src/k32host.c ${N32}/vxd32.c src/w16test.c ${PCRECOMP}/runtime/win16/identity/identity.c ${PCRECOMP}/runtime/win16/identity/drv16.c)
   set_source_files_properties(src/w16test.c ${PCRECOMP}/runtime/win16/identity/identity.c ${PCRECOMP}/runtime/win16/identity/drv16.c PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/work/w16/runtime;${PCRECOMP}/runtime/win16"
@@ -78,4 +84,6 @@ if(TARGET w16 AND EXISTS ${CMAKE_SOURCE_DIR}/src/gen/xcopy/recomp_dispatch.c)
   # with /DYNAMICBASE:NO the suspended child already has its process
   # parameters and heaps bottom-up there; an ASLR image moves them.
   target_link_options(w16test PRIVATE /DYNAMICBASE)
+  # the parts above 2 GB (LAA), clear of the guest images (0x70..0x7F, 0xBF..)
+  pcrecomp_gen_parts(w16test DIR ${W98_PARTDIR_w16test} BASE 0x90000000)
 endif()

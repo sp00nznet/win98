@@ -65,7 +65,8 @@ static LONG CALLBACK crash(EXCEPTION_POINTERS* ep) {
     HMODULE hm;
     if ((r->ExceptionCode & 0xF0000000u) != 0xC0000000u) return EXCEPTION_CONTINUE_SEARCH;
     if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)r->ExceptionAddress, &hm) && hm != GetModuleHandleA(NULL))
+                           (LPCSTR)r->ExceptionAddress, &hm) && hm != GetModuleHandleA(NULL)
+        && !GetProcAddress(hm, "recomp_part_dispatch"))   /* a part DLL's lifted code is ours too */
         return EXCEPTION_CONTINUE_SEARCH;
     fprintf(stderr, "\n=== fault 0x%08lX at %p (addr %08lX) ===\n  in lifted sub_%08X, last native call %s\n",
             r->ExceptionCode, r->ExceptionAddress,
