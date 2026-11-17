@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Session 30: the host is now a small exe plus one DLL per lifted module
+  (pcrecomp's pcrecomp_gen_parts); the single image of the whole shell lift
+  no longer started. browseui is lifted. Explorer's tray window gets its
+  messages through KRNL386's window-proc relay, and DIB sections work through
+  a DIBENG stand-in, so comctl32's image lists and the tray's child windows
+  are made and browseui's bands are created. Explorer still stops before its
+  first paint (an ole32 call returns with a broken stack).
 - Session 29: Explorer (W16_SHELL=Explorer.exe) runs its own lifted code on
   Win98's lifted shell32, shdocvw and ole32 up to building the taskbar's
   Start button; no desktop or taskbar paint yet. tools/reginst.py fills the

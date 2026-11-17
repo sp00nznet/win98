@@ -2455,3 +2455,104 @@ desktop's first paint (shdocvw's desktop or shell32's) and the taskbar.
 (2) Lift browseui (Start menu bands) and keep the exe under the image limit:
 try fewer garbage functions (ole32's catalog still has about 14k
 unimplemented ops from data decoded as code). (3) Then Start -> Run -> calc.
+
+### Session 30: the window-proc relay; one DLL per lifted module; browseui; DIB sections (handoff)
+
+pcrecomp w98 8703379 (parts, relay) and 95b732c (DIBENG
+stand-in, VMM RegQueryValue, negative-displacement jump tables). Relift
+w16test with the README line (now + browseui.dll, after `tools/vtseeds.py` for
+it), with the catalogs of kernel32, gdi32, advapi32, user32 and comctl32
+deleted first (the disasm change finds their jump tables above 2 GB). Then
+build.cmd: it links one DLL per lifted module. johnny and civnet were relifted
+into s30-* scratch trees with 428630a and with this pcrecomp, normal and
+identity mode: identical work/ trees, all four (twice: after the lifter
+change and after the disasm change). The NE lifter is untouched.
+
+**The relay (task 1).** KRNL386 2:763F/76BC, the 16-bit face of a 32-bit
+window procedure, puts no return at the flat [esp]: it copies the 16-bit
+frame, pushes 2:7678 inside it, and far-jumps to user32 BFF53955 with ebx at
+a far pointer to that frame. user32 returns by `lss sp, [ebx]; pop ds/di/si/bp;
+add sp, 8; retf 6` (BFF53901) into 2:7678. Three generic fixes:
+- identity w16_retf32: a far32 whose [esp] is no return (not 16:16 code, not
+  KRNL386's 32->16 stub) waits for any o16 retf that pops the stack above
+  where the call found it (g_thk back = W16_BACK_ANY, compared by linear
+  address); the retf's target is where the 16-bit side goes on.
+- lift32 (W9X): `retf N` now pops N (the immediate was ignored).
+- lift32 (W9X): `push <function>; ...; jmp <function>` is a call returning to
+  the pushed function (BFF53955: push BFF53981; push proc; jmp BFF58150, the
+  import jump). The lifted jmp is `RECOMP_ITAIL(target); RECOMP_ITAIL(pushed)`.
+  (computed_ret for all W9X rets was tried first: it breaks, because lifted
+  calls in functions on a 16-bit ss push their dummy return to flat esp; see
+  ponytails.)
+Explorer's tray window now gets its messages through the relay.
+
+**The size limit (task 2).** cmake `pcrecomp_gen_parts(<exe> DIR <gen> BASE
+<addr>)`: each lifted module's directory becomes `<exe>_<module>.dll`.
+drive32 writes `recomp_part.c` in each module directory (its own dispatch
+table, exported as recomp_part_dispatch); pcrecomp_gen_sources skips it, so a
+one-image host is unchanged. The exe keeps the runtime and an empty main
+table and exports all its symbols; recomp_types.h marks the register file and
+the other globals RECOMP_HOSTDATA (dllimport in a part, dllexport in the
+host) and RECOMP_WEAK ones extern dllimport in a part. native32 loads the
+parts (RECOMP_PARTS, a comma list) once, on the first lookup, and searches
+their tables. BASE gives fixed bases from there, each as large as its C:
+Win98 uses 0x90000000 (LAA), because ASLR put parts where Win98's own images
+want to load (shdocvw 0x77C60000). w16test.exe is now 34 MB, with 20 DLLs
+(ole32 100 MB, shdocvw 45, shell32 34, browseui 33). k32host's crash handler
+reports faults in parts too. browseui is lifted (9785 functions).
+
+**Explorer (task 3), how far it gets.** The tray's WM_CREATE ran into
+comctl32's ImageList_Create, which failed: GDI.EXE's CreateDIBSection loads
+DIBENG.DLL, and there was none. Lifting Win98's DIBENG is no way: it compiles
+its blt loops at run time (`call ss:[bp-20h]`). Instead drv16 writes a
+DIBENG.DLL stand-in like the other drivers (no Microsoft bytes): the display
+ordinals reuse DISPLAY's host functions, 300 CreateDIBPDevice builds the
+DIBENGINE header (deType 'RP', deDeltaScan negative for bottom-up), 30
+BitmapBits copies bytes. surf_of reads a DIBENGINE surface: GDI writes its
+own flat bits address at deBits (16h) after CreateDIBPDevice; 1/4/8 bpp go
+through a host copy of the colour table (found by the PDEVICE's address),
+16 bpp is 5-5-5, 24/32 B,G,R. comctl32's default image lists are 4 bpp.
+Also VMM service 0x17 is RegQueryValue (ole32's TreatAs lookup; first read as
+RegDeleteValue, which wrote into the box), and disasm32's jump-table pattern
+takes a negative displacement (`jmp [eax*4 - 0x401644B9]`, a table above
+2 GB: comctl32's window procedure arm BFE9BABD was run as native and faulted,
+non-executable as it should be).
+
+Now the tray window and TrayNotifyWnd are made, CoCreateInstance reaches
+browseui (its bands are created), and the run stops in ole32 (fault in
+sub_7F417744 after `call [eax]`, QueryInterface on an object from 7F40B06A:
+ebp/esp come back broken, ebp 0, esp 1Ch). Same family as the earlier
+ebp=0 cases: a callee returns with the wrong stack. Next: W16 dbgfn-style
+prints (scratch: print ebp/esp after each call of one lifted function, a
+parts rebuild of one module takes a minute) on the QI target. No paint of
+Explorer's own yet: the shots show USER's teal desktop. No check_explorer.sh.
+
+**Task 5.** Not done: TDB+54 ordering on real Win98, notepad's scroll bars
+(they are a BS_PATTERN brush: the stand-in fills pattern brushes solid in
+lbColor, which for a pattern brush is not a colour; drv16 now traces the
+brush's lbColor/hatch under W16_TRACE), calc keys 1/2.
+
+ponytail (this session):
+- w16_retf32 W16_BACK_ANY: the first o16 retf above the call's stack is its
+  return; a retf to elsewhere from deeper flat code would be taken for it.
+- push-function-jmp: only `push imm` of a known function with push/mov/
+  movzx/xchg between (no esp write); only W9X lifts.
+- Lifted calls inside functions on a 16-bit ss (`_ss_fn`) push their dummy
+  return at flat esp (a write into low linear memory). Not fixed.
+- Part bases: each part's slot is its C size rounded up + 16 MB; a part that
+  outgrows it is relocated by the loader (FIXED:NO), maybe onto a guest base.
+- SHELL VxD PM API 14h: a no-op.
+- DIBENG stand-in: no palettized surface conversion beyond a nearest-colour
+  search per pixel; the colour table is captured at creation (no
+  SetDIBColorTable); bits and tables are never freed; deBits past 64 KB is
+  taken as a flat address whatever its selector word holds; CreateDIBPDevice
+  answers the header size.
+
+**Regression.** check_m1, check_w16, check_calc, check_sol, check_winmine,
+check_notepad pass with the parts build (after each runtime change). check_m1's
+/P step failed once of five runs (no output, while the johnny/civnet relifts
+loaded the machine); it passed alone four times.
+
+**Next.** (1) The ole32 QueryInterface stack break above, then Explorer's
+desktop and taskbar paint, check_explorer.sh. (2) Start menu, Start -> Run ->
+calc. (3) The `_ss_fn` call push (see ponytails). (4) Task 5 items.
