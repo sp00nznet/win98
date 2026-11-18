@@ -258,6 +258,16 @@ static int imports_from(uint32_t base, const char* dll, const char** out, int ma
 
 static char g_root_host[MAX_PATH];
 
+/* A guest call and its eax, inside the machine lock: once native32_call_guest
+ * returns, the register globals are whichever guest thread runs next. */
+static uint32_t guest_call(uint32_t va, int n, const uint32_t* a) {
+    mach_enter();
+    native32_call_guest(va, n, a);
+    uint32_t r = g_eax;
+    mach_leave();
+    return r;
+}
+
 static int host_main(int argc, char** argv) {
     const char* sys = "work\\sys", *root = "work\\root";
     char dir[MAX_PATH];
@@ -560,9 +570,9 @@ static int host_main(int argc, char** argv) {
         _snprintf(cmd, sizeof cmd - 1, "C:\\WINDOWS\\COMMAND\\%s%s", APP_EXE, g_tail);
         si[0] = 0x44;
         uint32_t a[10] = { 0, (uint32_t)(uintptr_t)cmd, 0, 0, 1, 0, 0, 0, (uint32_t)(uintptr_t)si, (uint32_t)(uintptr_t)pi };
-        native32_call_guest(cpa, 10, a);
-        fprintf(stderr, "[boot] CreateProcessA(\"%s\") = %u, process %08X thread %08X\n", cmd, g_eax, pi[0], pi[1]);
-        if (!g_eax) return 1;
+        uint32_t made = guest_call(cpa, 10, a);
+        fprintf(stderr, "[boot] CreateProcessA(\"%s\") = %u, process %08X thread %08X\n", cmd, made, pi[0], pi[1]);
+        if (!made) return 1;
         uint32_t w[2] = { pi[0], 0xFFFFFFFFu };
         native32_call_guest(wfso, 2, w);
         uint32_t c[2] = { pi[0], (uint32_t)(uintptr_t)&code };
