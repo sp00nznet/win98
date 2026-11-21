@@ -161,6 +161,8 @@ Step 2 "Extracting your Windows 98 SE CD into work\cd"
 if (Skip 'work\cd\win98\BASE4.CAB') { Say "  Already done (skipping)." }
 else {
   $Iso = $Iso.Trim('"', ' ')
+  # a folder holding the .iso (what the launcher passes) is that .iso
+  if ($Iso -and (Test-Path -LiteralPath $Iso -PathType Container)) { $i = @(Get-ChildItem -LiteralPath $Iso -Filter *.iso -File)[0]; if ($i) { $Iso = $i.FullName } }
   if (-not $Iso) {
     $found = @(Get-ChildItem -Path $Root -Filter *.iso -File) + @(if (Test-Path work\iso) { Get-ChildItem -Path work\iso -Filter *.iso -File -Recurse })
     if ($found.Count -gt 0) { $Iso = $found[0].FullName; Say "  Found $Iso" }

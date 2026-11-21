@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.1.0] - 2026-11-20
+
 - Session 40 (final polish): the display stand-in now fills ExtTextOut's opaque rect for an empty string (comctl32's PatB), so rebars, grippers, the taskbar band and menu underlines paint grey instead of showing the desktop's teal; BitBlt converts colour<->mono for DIB-section image lists, so the folder window's disabled Back/Forward draw embossed (no magenta, no grey block). Favorites shows Links. Remaining gaps listed in docs/survey.md.
 - Session 39 (final): work/root held folders named `%USERPROFILE%`, `%PUBLIC%`, `%ProgramData%` and `Users\...\OneDrive` from the host's Shell Folders values. They were created in Sessions 29-32, before Session 33 boxed those keys whole. A traced run confirms that no host Shell Folders or ProfileList value reaches the guest now. The folders were removed, and k32host builds C:\ the way Win98 does (WINDOWS, My Documents, Program Files). The status write-up in docs/survey.md and the README is finished.
 - Summary to date: Win98's own KRNL386/USER/GDI (16-bit) and kernel32/user32/gdi32/shell32/Explorer (32-bit), all lifted, run Explorer as the shell with the Start menu, Run, Notepad, Calculator, Solitaire, Minesweeper, My Computer and C:. Ten gates pass.

@@ -1,0 +1,35 @@
+{
+  "title": "Windows 98 SE",
+  "repo": "sp00nznet/win98",
+  "accent": "#1084d0",
+  "note": {
+    "windows": "Point it at the folder holding your own Windows 98 Second Edition CD image (.iso). The first build takes about an hour and 3 GB; leave 4 GB free. Python, 7-Zip and the Visual Studio Build Tools (about 3 GB) are installed if they are missing; Windows asks for permission once. Nothing from Windows is downloaded."
+  },
+  "game": {
+    "name": "Windows 98 SE CD image",
+    "files": [
+      "*.iso"
+    ]
+  },
+  "sources": [
+    {
+      "repo": "sp00nznet/pcrecomp",
+      "ref": "main",
+      "dir": "pcrecomp"
+    }
+  ],
+  "setup": {
+    "windows": [
+      "powershell",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "tools\\setup.ps1",
+      "-Yes",
+      "-Iso",
+      "{game}"
+    ]
+  },
+  "play": "Windows 98 (recomp).cmd"
+}
